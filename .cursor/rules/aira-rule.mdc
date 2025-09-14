@@ -1,0 +1,158 @@
+---
+alwaysApply: true
+---
+
+
+# AI Researcher Project - Cursor Rules
+
+You are working on an AI-powered research assistant built with LangGraph and React. This project consists of a Python backend using LangGraph for AI agent orchestration and a React frontend for the chat interface.
+
+## Project Architecture Understanding
+
+### Backend (`/backend`)
+- **Tech Stack**: Python 3.12+, LangGraph, LangChain, FastAPI, OpenAI GPT-4o-mini
+- **Main Files**: 
+  - `app/agent/graph.py` - Core LangGraph agent implementation
+  - `langgraph.json` - Agent configuration
+  - `pyproject.toml` - Dependencies managed with `uv`
+- **Dev Server**: `uv run langgraph dev` (runs on http://localhost:2024)
+- **Agent ID**: `agent` (used in frontend configuration)
+
+### Frontend (`/web`)
+- **Tech Stack**: React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui
+- **Key Components**:
+  - Thread management for conversations
+  - Real-time message streaming
+  - Agent inbox with interrupts handling
+  - Markdown rendering with syntax highlighting
+- **Dev Server**: `pnpm dev` (runs on http://localhost:5173)
+
+## Development Workflow Rules
+
+1. **Environment Setup Priority**:
+   - Always ensure `.env` file exists in backend with `OPENAI_API_KEY`
+   - Use `uv` for Python dependency management in backend
+   - Use `pnpm` for Node.js dependencies in frontend
+
+2. **Development Server Management**:
+   - Start backend first: `cd backend && uv run langgraph dev`
+   - Then start frontend: `cd web && pnpm dev`
+   - Frontend connects to backend at http://localhost:2024 with agent ID "agent"
+
+3. **Code Organization Patterns**:
+   - Backend: Follow LangGraph patterns with State management and graph nodes
+   - Frontend: Use React components in `/components` with proper TypeScript types
+   - Shared types for agent communication in `/types.ts` files
+
+4. **Agent Development Best Practices**:
+   - Modify `backend/app/agent/graph.py` for agent logic changes
+   - Use proper LangGraph state management with `TypedDict` and `add_messages`
+   - Test agent changes with `uv run python -c "from app.agent.graph import graph; print('Graph loaded')"`
+
+5. **Frontend Integration**:
+   - Agent interrupts are handled in `/components/thread/agent-inbox/`
+   - Message types: human, ai, tool-calls, generic-interrupt
+   - Stream management in `/providers/Stream.tsx`
+
+6. **File Modification Guidelines**:
+   - For agent logic: Edit `backend/app/agent/graph.py`
+   - For UI components: Use existing component structure in `/web/src/components/`
+   - For styling: Use Tailwind CSS classes and shadcn/ui components
+   - For API integration: Modify providers in `/web/src/providers/`
+
+7. **Debugging Approach**:
+   - Backend issues: Check LangGraph dev server logs and test graph compilation
+   - Frontend issues: Use React dev tools and check console for streaming errors
+   - Connection issues: Verify backend is running on port 2024 and frontend config
+
+8. **Feature Development**:
+   - New agent capabilities: Add nodes/edges to the graph in `graph.py`
+   - New UI features: Create components following the existing pattern
+   - New tools for agent: Integrate as LangChain tools in the graph definition
+
+## Common Tasks
+
+- **Adding new agent tools**: Import and add to the graph in `graph.py`
+- **UI component changes**: Follow shadcn/ui patterns in `/web/src/components/ui/`
+- **Conversation handling**: Modify thread components in `/components/thread/`
+- **Styling updates**: Use Tailwind classes and CSS modules where needed
+
+Always consider the full-stack nature of changes and test both backend agent functionality and frontend user experience.
+
+
+# AI Researcher Project - Cursor Rules
+
+You are working on an AI-powered research assistant built with LangGraph and React. This project consists of a Python backend using LangGraph for AI agent orchestration and a React frontend for the chat interface.
+
+## Project Architecture Understanding
+
+### Backend (`/backend`)
+- **Tech Stack**: Python 3.12+, LangGraph, LangChain, FastAPI, OpenAI GPT-4o-mini
+- **Main Files**: 
+  - `app/agent/graph.py` - Core LangGraph agent implementation
+  - `langgraph.json` - Agent configuration
+  - `pyproject.toml` - Dependencies managed with `uv`
+- **Dev Server**: `uv run langgraph dev` (runs on http://localhost:2024)
+- **Agent ID**: `agent` (used in frontend configuration)
+
+### Frontend (`/web`)
+- **Tech Stack**: React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui
+- **Key Components**:
+  - Thread management for conversations
+  - Real-time message streaming
+  - Agent inbox with interrupts handling
+  - Markdown rendering with syntax highlighting
+- **Dev Server**: `pnpm dev` (runs on http://localhost:5173)
+
+## Development Workflow Rules
+
+1. **Environment Setup Priority**:
+   - Always ensure `.env` file exists in backend with `OPENAI_API_KEY`
+   - Use `uv` for Python dependency management in backend
+   - Use `pnpm` for Node.js dependencies in frontend
+
+2. **Development Server Management**:
+   - Start backend first: `cd backend && uv run langgraph dev`
+   - Then start frontend: `cd web && pnpm dev`
+   - Frontend connects to backend at http://localhost:2024 with agent ID "agent"
+
+3. **Code Organization Patterns**:
+   - Backend: Follow LangGraph patterns with State management and graph nodes
+   - Frontend: Use React components in `/components` with proper TypeScript types
+   - Shared types for agent communication in `/types.ts` files
+
+4. **Agent Development Best Practices**:
+   - Modify `backend/app/agent/graph.py` for agent logic changes
+   - Use proper LangGraph state management with `TypedDict` and `add_messages`
+   - Test agent changes with `uv run python -c "from app.agent.graph import graph; print('Graph loaded')"`
+
+5. **Frontend Integration**:
+   - Agent interrupts are handled in `/components/thread/agent-inbox/`
+   - Message types: human, ai, tool-calls, generic-interrupt
+   - Stream management in `/providers/Stream.tsx`
+
+6. **File Modification Guidelines**:
+   - For agent logic: Edit `backend/app/agent/graph.py`
+   - For UI components: Use existing component structure in `/web/src/components/`
+   - For styling: Use Tailwind CSS classes and shadcn/ui components
+   - For API integration: Modify providers in `/web/src/providers/`
+
+7. **Debugging Approach**:
+   - Backend issues: Check LangGraph dev server logs and test graph compilation
+   - Frontend issues: Use React dev tools and check console for streaming errors
+   - Connection issues: Verify backend is running on port 2024 and frontend config
+
+8. **Feature Development**:
+   - New agent capabilities: Add nodes/edges to the graph in `graph.py`
+   - New UI features: Create components following the existing pattern
+   - New tools for agent: Integrate as LangChain tools in the graph definition
+
+## Common Tasks
+
+- **Adding new agent tools**: Import and add to the graph in `graph.py`
+- **UI component changes**: Follow shadcn/ui patterns in `/web/src/components/ui/`
+- **Conversation handling**: Modify thread components in `/components/thread/`
+- **Styling updates**: Use Tailwind classes and CSS modules where needed
+
+Always consider the full-stack nature of changes and test both backend agent functionality and frontend user experience.
+

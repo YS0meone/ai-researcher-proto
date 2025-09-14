@@ -1,0 +1,14 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.116.1",
+    "langchain[openai]>=0.3.27",
+    "langgraph>=0.6.7",
+    "langgraph-cli[inmem]>=0.4.2",
+    "langsmith>=0.4.27",
+    "pydantic>=2.11.9",
+]

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
 
     DATABASE_URL: str
+    DATABASE_ASYNC_URL: str
     DATABASE_POOL_SIZE: int
     DATABASE_POOL_TIMEOUT: int
     DATABASE_MAX_OVERFLOW: int

@@ -22,4 +22,5 @@ dependencies = [
     "langchain-community>=0.3.29",
     "bs4>=0.0.2",
     "lxml>=5.0.0",
+    "asyncpg>=0.30.0",
 ]

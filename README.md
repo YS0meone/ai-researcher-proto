@@ -20,9 +20,10 @@ This project is organized into two main components:
 
 ## Quick Start
 
-1. **Set up the backend**: See [`backend/README.md`](./backend/README.md) for Python environment setup
-2. **Set up the frontend**: See [`web/README.md`](./web/README.md) for React app setup
-3. **Start developing**: The frontend automatically connects to the backend when both are running
+1. **Set up the database**: run `docker-compose up -d` in project root. 
+2. **Set up the backend**: See [`backend/README.md`](./backend/README.md) for Python environment setup
+3. **Set up the frontend**: See [`web/README.md`](./web/README.md) for React app setup
+4. **Start developing**: The frontend automatically connects to the backend when both are running
 
 ## Features
 

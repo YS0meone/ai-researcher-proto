@@ -27,4 +27,7 @@ class Settings(BaseSettings):
     WEAVIATE_URL: str
     WEAVIATE_API_KEY: str
 
+    # Embedding model settings
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    EMBEDDING_DIMENSION: int = 384
 settings = Settings()

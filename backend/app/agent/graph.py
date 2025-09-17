@@ -5,22 +5,28 @@ from langchain.schema import SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from app.tools.search import search_papers
+from app.tools.search import search_papers, semantic_search_papers, hybrid_search_papers
 
 from app.core.config import settings
 
 model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
-model = model.bind_tools([search_papers])
+model = model.bind_tools([search_papers, semantic_search_papers, hybrid_search_papers])
 
 SYSTEM_PROMPT = """You are an AI research assistant specialized in academic paper search and analysis.
 
 Your capabilities:
-- Search through a database of academic papers using full-text search
+- Search through a database of academic papers using multiple search methods:
+  * search_papers: Traditional full-text search using keywords
+  * semantic_search_papers: Advanced semantic search using vector similarity
+  * hybrid_search_papers: Combined approach for best results
 - Answer questions about research topics, methodologies, and findings
 - Provide summaries and insights from academic literature
 
 When users ask about research topics, papers, or academic questions:
-1. Use the search_papers tool to find relevant papers
+1. Choose the most appropriate search method:
+   - Use semantic_search_papers for conceptual queries (e.g., "papers about attention mechanisms")
+   - Use search_papers for specific keyword searches (e.g., "BERT transformer")
+   - Use hybrid_search_papers for comprehensive results combining both approaches
 2. Analyze and synthesize the results
 3. Provide clear, informative responses with paper references
 
@@ -52,7 +58,7 @@ def should_continue(state: State):
     return END
 
 # Define the tool node
-tools = ToolNode([search_papers])
+tools = ToolNode([search_papers, semantic_search_papers, hybrid_search_papers])
 
 graph_builder.add_node("chatbot", chatbot)
 graph_builder.add_node("tools", tools)

@@ -12,22 +12,25 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str
 
-    DATABASE_URL: str
-    DATABASE_ASYNC_URL: str
-    DATABASE_POOL_SIZE: int
-    DATABASE_POOL_TIMEOUT: int
-    DATABASE_MAX_OVERFLOW: int
-    SQL_ECHO: bool
-    POSTGRES_HOST: str
-    POSTGRES_PORT: int
-    POSTGRES_DB: str
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
+    DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/ai_researcher"
+    DATABASE_ASYNC_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/ai_researcher"
+    DATABASE_POOL_SIZE: int = 10
+    DATABASE_POOL_TIMEOUT: int = 30
+    DATABASE_MAX_OVERFLOW: int = 20
+    SQL_ECHO: bool = False
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "ai_researcher"
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "password"
 
-    WEAVIATE_URL: str
-    WEAVIATE_API_KEY: str
+    WEAVIATE_URL: str = ""
+    WEAVIATE_API_KEY: str = ""
 
     # Embedding model settings
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_DIMENSION: int = 384
+    
+    # Optional: LangSmith settings for debugging and monitoring
+    LANGSMITH_API_KEY: str = ""
 settings = Settings()

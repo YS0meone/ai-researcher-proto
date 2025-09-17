@@ -52,10 +52,15 @@ OPENAI_API_KEY=sk-proj-your_actual_openai_api_key_here
 ### 4. Run the Development Server
 
 ```bash
-uv run langgraph dev
+uv run langgraph dev --host localhost --port 2024
 ```
 
-The LangGraph development server will start on `http://localhost:2024` by default.
+The LangGraph development server will start on `http://localhost:2024`.
+
+**Note**: We specify `--host localhost --port 2024` explicitly to ensure:
+- Proper browser compatibility (localhost vs 0.0.0.0)
+- Consistent port for frontend connection
+- Compatibility with LangGraph Studio
 
 ## Project Structure
 
@@ -167,3 +172,32 @@ curl -X POST "http://localhost:2024/threads/YOUR_THREAD_ID/runs" \
 2. Run migrations: `uv run alembic upgrade head`
 3. Populate papers with embeddings
 4. Test all three search methods with real data
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### "Extra inputs are not permitted" Error
+If you see a Pydantic validation error about extra inputs:
+```bash
+ValidationError: 1 validation error for Settings
+langsmith_api_key
+  Extra inputs are not permitted
+```
+
+**Solution**: This means your `.env` file contains a variable not defined in `app/core/config.py`. All environment variables must be explicitly declared in the Settings class.
+
+#### Configuration Loading Issues
+Test your configuration:
+```bash
+# Test configuration loads
+uv run python -c "from app.core.config import settings; print('Config OK')"
+
+# Test graph loads
+uv run python -c "from app.agent.graph import graph; print('Graph OK')"
+```
+
+#### Server Won't Start
+1. Check your `.env` file exists and has `OPENAI_API_KEY`
+2. Ensure all required environment variables have defaults in `config.py`
+3. Use explicit host/port: `uv run langgraph dev --host localhost --port 2024`

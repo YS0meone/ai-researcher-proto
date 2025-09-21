@@ -8,7 +8,7 @@ tmpPostgres = urlparse(settings.DATABASE_URL)
 
 
 def init_db() -> None:
-    engine = create_engine(settings.DATABASE_URL, echo=settings.SQL_ECHO)
+    engine = create_engine(settings.DATABASE_URL, echo=settings.DATABASE_SQL_ECHO)
     Base.metadata.create_all(engine)
     print("Database initialized")
 

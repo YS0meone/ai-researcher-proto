@@ -1,16 +1,23 @@
 from elasticsearch import Elasticsearch
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from app.core.config import settings, ElasticsearchConfig
+from app.db.schema import ArxivPaper, ArxivPaperBatch
 
 class ElasticsearchService:
     def __init__(self, config: ElasticsearchConfig):
         auth = (config.username, config.password) if config.username and config.password else None
-        self.client = Elasticsearch([config.url], basic_auth=auth)
+        self.client = Elasticsearch(
+            [config.url], basic_auth=auth,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
         self.index = config.index
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
+        # Use SPECTER for scientific papers (768 dimensions)
+        self.embedding_model = SentenceTransformer('allenai-specter')
+        self.create_index()
+        print(self.client.ping())   
         # Verify connection
         if not self.client.ping():
             raise ConnectionError("Failed to connect to Elasticsearch")
@@ -54,18 +61,48 @@ class ElasticsearchService:
             },
             "mappings": {
                 "properties": {
-                    # Database ID field
+                    # ArXiv ID (the main identifier)
                     "id": {
-                        "type": "integer"
-                    },
-                    
-                    # Paper identifier
-                    "paper_id": {
                         "type": "keyword"
                     },
                     
-                    # Text fields for full-text search
+                    # Submitter name
+                    "submitter": {
+                        "type": "text",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256
+                            }
+                        }
+                    },
+                    
+                    # Authors (string format as in ArXiv)
+                    "authors": {
+                        "type": "text",
+                        "analyzer": "paper_analyzer",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 512
+                            }
+                        }
+                    },
+                    
+                    # Title (text field for full-text search)
                     "title": {
+                        "type": "text",
+                        "analyzer": "paper_analyzer",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 512
+                            }
+                        }
+                    },
+                    
+                    # Comments
+                    "comments": {
                         "type": "text",
                         "analyzer": "paper_analyzer",
                         "fields": {
@@ -75,48 +112,67 @@ class ElasticsearchService:
                             }
                         }
                     },
+                    
+                    # Journal reference
+                    "journal-ref": {
+                        "type": "text",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256
+                            }
+                        }
+                    },
+                    
+                    # DOI
+                    "doi": {
+                        "type": "keyword"
+                    },
+                    
+                    # Report number
+                    "report-no": {
+                        "type": "keyword"
+                    },
+                    
+                    # Categories (space-separated string)
+                    "categories": {
+                        "type": "keyword"
+                    },
+                    
+                    # License (can be null)
+                    "license": {
+                        "type": "keyword"
+                    },
+                    
+                    # Abstract (main searchable content)
                     "abstract": {
                         "type": "text",
                         "analyzer": "paper_analyzer"
                     },
-                    "full_text": {
-                        "type": "text",
-                        "analyzer": "paper_analyzer"
-                    },
-                    
-                    # Vector fields for semantic search (384 dimensions for all-MiniLM-L6-v2)
+                                        
+                    # Vector fields for semantic search (768 dimensions for SPECTER)
                     "title_vector": {
                         "type": "dense_vector",
-                        "dims": 384,
+                        "dims": 768,
                         "index": True,
                         "similarity": "cosine"
                     },
                     "abstract_vector": {
                         "type": "dense_vector",
-                        "dims": 384,
-                        "index": True,
-                        "similarity": "cosine"
-                    },
-                    "full_text_vector": {
-                        "type": "dense_vector",
-                        "dims": 384,
+                        "dims": 768,
                         "index": True,
                         "similarity": "cosine"
                     },
                     
-                    # Authors as keyword array for exact matching
-                    "authors": {
+                    # Derived fields for easier querying
+                    "categories_array": {
                         "type": "keyword"
                     },
-                    
-                    # Date field
-                    "published_date": {
+                    "submission_date": {
                         "type": "date"
                     },
-                    
-                    # URL field
-                    "url": {
-                        "type": "keyword"
+                    "update_date": {
+                        "type": "date"
                     }
                 }
             }
@@ -128,10 +184,139 @@ class ElasticsearchService:
                 index=target_index,
                 body=mapping
             )
-            print(f"Successfully created index '{target_index}'")
+            print(f"Successfully created index '{target_index}', {response}")
             return True
             
         except Exception as e:
             print(f"Error creating index '{target_index}': {str(e)}")
             return False
+    # Add these methods to your ElasticsearchService class:
+
+    def add_paper(self, paper: 'ArxivPaper', index_name: Optional[str] = None) -> bool:
+        """
+        Add a single paper to the Elasticsearch index with vector embeddings.
+        
+        Args:
+            paper: ArxivPaper model instance
+            index_name: Optional index name, defaults to self.index
+            
+        Returns:
+            bool: True if paper was successfully indexed, False otherwise
+        """
+        target_index = index_name or self.index
+        
+        try:
+            # Convert paper to dict format for Elasticsearch
+            doc = paper.to_elasticsearch_doc()
+            
+            # Generate vector embeddings for semantic search using SPECTER
+            if paper.title:
+                doc['title_vector'] = self.embedding_model.encode(paper.title).tolist()
+            
+            if paper.abstract:
+                doc['abstract_vector'] = self.embedding_model.encode(paper.abstract).tolist()
+            
+            # Parse categories into array for easier filtering
+            if paper.categories:
+                doc['categories_array'] = paper.categories.split()
+            
+            # Use ArXiv ID as document ID for upserts
+            doc_id = paper.id
+            
+            # Index the document
+            response = self.client.index(
+                index=target_index,
+                id=doc_id,
+                body=doc
+            )
+            
+            print(f"Successfully indexed paper: {doc_id} - {paper.title[:50]}...")
+            return True
+            
+        except Exception as e:
+            print(f"Error indexing paper {paper.id}: {str(e)}")
+            return False
+
+    def add_papers_bulk(self, papers: List['ArxivPaper'], index_name: Optional[str] = None) -> Dict[str, int]:
+        """
+        Bulk add multiple papers to the Elasticsearch index.
+        
+        Args:
+            papers: List of ArxivPaper model instances
+            index_name: Optional index name, defaults to self.index
+            
+        Returns:
+            Dict with success and error counts
+        """
+        from elasticsearch.helpers import bulk
+        
+        target_index = index_name or self.index
+        
+        def generate_docs():
+            for paper in papers:
+                try:
+                    # Convert paper to dict format
+                    doc = paper.to_elasticsearch_doc()
+                    
+                    # Generate embeddings using SPECTER
+                    if paper.title:
+                        doc['title_vector'] = self.embedding_model.encode(paper.title).tolist()
+                    
+                    if paper.abstract:
+                        doc['abstract_vector'] = self.embedding_model.encode(paper.abstract).tolist()
+                    
+                    # Parse categories into array
+                    if paper.categories:
+                        doc['categories_array'] = paper.categories.split()
+                    
+                    yield {
+                        "_index": target_index,
+                        "_id": paper.id,
+                        "_source": doc
+                    }
+                except Exception as e:
+                    print(f"Error preparing paper {paper.id}: {str(e)}")
+                    continue
+        
+        try:
+            success_count, errors = bulk(
+                self.client,
+                generate_docs(),
+                index=target_index,
+                chunk_size=100,
+                request_timeout=60,
+                max_retries=3,
+                initial_backoff=2,
+                max_backoff=600
+            )
+            
+            result = {
+                'success': success_count,
+                'errors': len(errors) if errors else 0
+            }
+            
+            print(f"Bulk indexing completed: {result['success']} successful, {result['errors']} errors")
+            
+            # Print error details if any
+            if errors:
+                for error in errors[:5]:  # Show first 5 errors
+                    print(f"Error detail: {error}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error in bulk indexing: {str(e)}")
+            return {'success': 0, 'errors': len(papers)}
     
+    def add_paper_batch(self, batch: 'ArxivPaperBatch', index_name: Optional[str] = None) -> Dict[str, int]:
+        """
+        Add papers using ArxivPaperBatch model.
+        
+        Args:
+            batch: ArxivPaperBatch model instance
+            index_name: Optional index name
+            
+        Returns:
+            Dict with success and error counts
+        """
+        return self.add_papers_bulk(batch.papers, index_name)

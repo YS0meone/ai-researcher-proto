@@ -17,6 +17,10 @@ import yaml
 from app.core.config import settings, PaperLoaderConfig
 from .elasticsearch import ElasticsearchService
 import json
+from typing import Optional, List
+from pydantic import BaseModel
+from datetime import datetime
+from app.db.schema import ArxivPaper
 
 def filter_json_stream(file_path, filter_values):
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -47,8 +51,8 @@ class PaperLoader:
     def __init__(self, config: PaperLoaderConfig):
         self.config = config
         # lazy init elasticsearch service
-        # if not self.config.use_postgres:
-        #     self.elasticsearch_service = ElasticsearchService(settings.elasticsearch_config)
+        if not self.config.use_postgres:
+            self.elasticsearch_service = ElasticsearchService(settings.elasticsearch_config)
     
     def load_by_search(self, query: str):
         params = [None] * self.config.workers
@@ -114,21 +118,80 @@ class PaperLoader:
     #             line = file.readline()
 
 
-    def load_by_metadata(self):
-        if not self.config.arxiv_metadata_path:
-            raise ValueError("arxiv_metadata_path is required")
-        id_list = []
-        cnt = self.config.batch_size * self.config.workers
-        for item in filter_json_stream(self.config.arxiv_metadata_path, ['cs.CL']):
-            id_list.append(item['id'])
-            cnt -= 1
-            if cnt == 0:
-                break
+    # def load_by_metadata(self):
+        # if not self.config.arxiv_metadata_path:
+        #     raise ValueError("arxiv_metadata_path is required")
+        # id_list = []
+        # cnt = self.config.batch_size * self.config.workers
+        # for item in filter_json_stream(self.config.arxiv_metadata_path, ['cs.CL']):
+        #     id_list.append(item['id'])
+        #     cnt -= 1
+        #     if cnt == 0:
+        #         break
 
-        client = arxiv.Client()
-        search = arxiv.Search(id_list=id_list)
-        results = client.results(search)
-        for result in results:
-            file_name = re.sub(r'[<>:"/\\|?*]', '_', result.title.replace(" ", "_"))
-            result.download_pdf(dirpath=self.config.output_dir, filename=file_name+".pdf")
+        # client = arxiv.Client()
+        # search = arxiv.Search(id_list=id_list)
+        # results = client.results(search)
+        # for result in results:
+        #     file_name = re.sub(r'[<>:"/\\|?*]', '_', result.title.replace(" ", "_"))
+        #     result.download_pdf(dirpath=self.config.output_dir, filename=file_name+".pdf")
+    
+    def load_by_metadata(self, categories_filter: List[str] = None):
+        """
+        Load papers from JSON file and index them into Elasticsearch.
+        
+        Args:
+            json_path: Path to the ArXiv JSON file
+            categories_filter: Optional list of categories to filter (e.g., ['cs.CL', 'cs.AI'])
+            limit: Optional limit on number of papers to process
+        """
+        limit = self.config.batch_size * self.config.workers
+        json_path = self.config.arxiv_metadata_path
+        if not self.elasticsearch_service:
+            raise RuntimeError("Elasticsearch service not initialized")
+        
+        papers_batch = []
+        processed = 0
+        
+        # Process papers from JSON stream
+        for paper_data in filter_json_stream(json_path, categories_filter or []):
+            try:
+                # Create ArxivPaper model from JSON data
+                paper = ArxivPaper(
+                    id=paper_data['id'],
+                    submitter=paper_data.get('submitter', ''),
+                    authors=paper_data.get('authors', ''),
+                    title=paper_data.get('title', ''),
+                    abstract=paper_data.get('abstract', ''),
+                    comments=paper_data.get('comments'),
+                    journal_ref=paper_data.get('journal-ref'),
+                    doi=paper_data.get('doi'),
+                    report_no=paper_data.get('report-no'),
+                    categories=paper_data.get('categories', ''),
+                    license=paper_data.get('license')
+                )
+                
+                papers_batch.append(paper)
+                processed += 1
+                
+                # Index in batches of 100
+                if len(papers_batch) >= 100:
+                    result = self.elasticsearch_service.add_papers_bulk(papers_batch)
+                    print(f"Indexed batch: {result}")
+                    papers_batch = []
+                
+                if limit and processed >= limit:
+                    break
+                    
+            except Exception as e:
+                print(f"Error processing paper {paper_data.get('id', 'unknown')}: {e}")
+                continue
+        
+        # Index remaining papers
+        if papers_batch:
+            result = self.elasticsearch_service.add_papers_bulk(papers_batch)
+            print(f"Indexed final batch: {result}")
+        
+        print(f"Total papers processed: {processed}")
+        
         

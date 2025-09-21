@@ -5,7 +5,7 @@ from app.services.elasticsearch import ElasticsearchService
     
 def main():
     loader = PaperLoader(settings.paper_loader_config)
-    loader.load_by_metadata()
+    loader.load_by_metadata(categories_filter=['cs.CL'])
 
 if __name__ == "__main__":
     main()

@@ -55,23 +55,21 @@ The LangGraph development server will start on `http://localhost:2024` by defaul
 
 ### 5. Run the data pipeline
 
-First start the grobid parser container using the following command in a separate terminal
+First make sure you have copy the `.env.example` file in both the backend and project root and create your own `.env` file. Especially, make sure you have the arxiv dataset downloaded and its path configured in the environment variable.
 
-```bash
-docker run --rm --init --ulimit core=0 -p 8070:8070 grobid/grobid:0.8.2-crf
-```
-
-Then start the database using
+Then start the elastic search and grobid container using
 
 ```bash
 docker-compose up -d
 ```
 
-Finally in the backend folder run
+In the backend folder run
 
 ```bash
-uv run python -m app.data_pipeline -n 50 -q "cat:cs.CL AND all:nlp OR all:natural language processing" -o ./papers -p 2
+uv run python -m app.data_pipeline
 ```
+
+Your elasticsearch index should be created. And the papers should be index and embedded into the data store of elastic search. (Notice, the paper loader for metadata loading is currently single threaded, the total amount of paper that is gonna be fetched from the arxiv dataset is based on: batch_size * worker. It would be migrated to concurrent version in the future.)
 
 ## Project Structure
 

@@ -320,3 +320,264 @@ class ElasticsearchService:
             Dict with success and error counts
         """
         return self.add_papers_bulk(batch.papers, index_name)
+    
+    def hybrid_search(
+        self, 
+        query: str, 
+        limit: int = 10,
+        categories_filter: List[str] = None,
+        text_weight: float = 0.7,
+        vector_weight: float = 0.3,
+        index_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search combining text search and vector similarity.
+        
+        Args:
+            query: Search query string
+            limit: Maximum number of results to return
+            categories_filter: Optional list of categories to filter by
+            text_weight: Weight for text-based search (0.0 to 1.0)
+            vector_weight: Weight for vector similarity search (0.0 to 1.0)
+            index_name: Optional index name, defaults to self.index
+            
+        Returns:
+            List of search results with scores and paper data
+        """
+        target_index = index_name or self.index
+        
+        try:
+            # Generate query embedding for vector search
+            query_vector = self.embedding_model.encode(query).tolist()
+            
+            # Build the hybrid search query
+            search_body = {
+                "size": limit,
+                "query": {
+                    "bool": {
+                        "should": [
+                            # Text-based search component
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": [
+                                        "title^3",      # Boost title matches
+                                        "abstract^2",   # Boost abstract matches
+                                        "authors^1.5",  # Boost author matches
+                                        "comments",
+                                        "journal-ref"
+                                    ],
+                                    "type": "best_fields",
+                                    "fuzziness": "AUTO"
+                                }
+                            }
+                        ],
+                        "filter": []
+                    }
+                },
+                "knn": {
+                    "field": "title_vector",
+                    "query_vector": query_vector,
+                    "k": limit * 2,  # Get more candidates for reranking
+                    "num_candidates": 100
+                },
+                "_source": {
+                    "excludes": ["title_vector", "abstract_vector"]  # Exclude vectors from results
+                },
+                "highlight": {
+                    "fields": {
+                        "title": {},
+                        "abstract": {"fragment_size": 150, "number_of_fragments": 2},
+                        "authors": {}
+                    }
+                }
+            }
+            
+            # Add category filter if specified
+            if categories_filter:
+                search_body["query"]["bool"]["filter"].append({
+                    "terms": {
+                        "categories_array": categories_filter
+                    }
+                })
+            
+            # Execute the search
+            response = self.client.search(
+                index=target_index,
+                body=search_body
+            )
+            
+            # Process and combine results
+            results = []
+            for hit in response['hits']['hits']:
+                result = {
+                    'id': hit['_id'],
+                    'score': hit['_score'],
+                    'source': hit['_source'],
+                    'highlights': hit.get('highlight', {})
+                }
+                results.append(result)
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error in hybrid search: {str(e)}")
+            return []
+    
+    def semantic_search(
+        self, 
+        query: str, 
+        limit: int = 10,
+        field: str = "title_vector",
+        categories_filter: List[str] = None,
+        index_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform pure semantic search using vector similarity.
+        
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            field: Vector field to search against (title_vector, abstract_vector)
+            categories_filter: Optional categories to filter by
+            index_name: Optional index name
+            
+        Returns:
+            List of semantically similar papers
+        """
+        target_index = index_name or self.index
+        
+        try:
+            # Generate query embedding
+            query_vector = self.embedding_model.encode(query).tolist()
+            
+            search_body = {
+                "size": limit,
+                "knn": {
+                    "field": field,
+                    "query_vector": query_vector,
+                    "k": limit,
+                    "num_candidates": 100
+                },
+                "_source": {
+                    "excludes": ["title_vector", "abstract_vector"]
+                }
+            }
+            
+            # Add category filter if specified
+            if categories_filter:
+                search_body["query"] = {
+                    "bool": {
+                        "filter": [{
+                            "terms": {
+                                "categories_array": categories_filter
+                            }
+                        }]
+                    }
+                }
+            
+            response = self.client.search(
+                index=target_index,
+                body=search_body
+            )
+            
+            results = []
+            for hit in response['hits']['hits']:
+                result = {
+                    'id': hit['_id'],
+                    'score': hit['_score'],
+                    'source': hit['_source']
+                }
+                results.append(result)
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error in semantic search: {str(e)}")
+            return []
+    
+    def text_search(
+        self, 
+        query: str, 
+        limit: int = 10,
+        categories_filter: List[str] = None,
+        index_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform traditional text-based search.
+        
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            categories_filter: Optional categories to filter by
+            index_name: Optional index name
+            
+        Returns:
+            List of text-matching papers
+        """
+        target_index = index_name or self.index
+        
+        try:
+            search_body = {
+                "size": limit,
+                "query": {
+                    "bool": {
+                        "should": [
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": [
+                                        "title^3",
+                                        "abstract^2", 
+                                        "authors^1.5",
+                                        "comments",
+                                        "journal-ref"
+                                    ],
+                                    "type": "best_fields",
+                                    "fuzziness": "AUTO"
+                                }
+                            }
+                        ],
+                        "filter": []
+                    }
+                },
+                "_source": {
+                    "excludes": ["title_vector", "abstract_vector"]
+                },
+                "highlight": {
+                    "fields": {
+                        "title": {},
+                        "abstract": {"fragment_size": 150, "number_of_fragments": 2},
+                        "authors": {}
+                    }
+                }
+            }
+            
+            # Add category filter if specified
+            if categories_filter:
+                search_body["query"]["bool"]["filter"].append({
+                    "terms": {
+                        "categories_array": categories_filter
+                    }
+                })
+            
+            response = self.client.search(
+                index=target_index,
+                body=search_body
+            )
+            
+            results = []
+            for hit in response['hits']['hits']:
+                result = {
+                    'id': hit['_id'],
+                    'score': hit['_score'],
+                    'source': hit['_source'],
+                    'highlights': hit.get('highlight', {})
+                }
+                results.append(result)
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error in text search: {str(e)}")
+            return []

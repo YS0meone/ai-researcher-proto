@@ -1,6 +1,5 @@
 from app.core.config import settings
 from app.services.paper_loader import PaperLoader
-from app.services.elasticsearch import ElasticsearchService
 
     
 def main():

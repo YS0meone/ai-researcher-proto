@@ -4,10 +4,12 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from app.core.config import settings, ElasticsearchConfig
 from app.db.schema import ArxivPaper, ArxivPaperBatch
+import time
 
 class ElasticsearchService:
     def __init__(self, config: ElasticsearchConfig):
         auth = (config.username, config.password) if config.username and config.password else None
+        print(config.url)
         self.client = Elasticsearch(
             [config.url], basic_auth=auth,
             verify_certs=False,
@@ -16,12 +18,27 @@ class ElasticsearchService:
         self.index = config.index
         # Use SPECTER for scientific papers (768 dimensions)
         self.embedding_model = SentenceTransformer('allenai-specter')
-        self.create_index()
-        print(self.client.ping())   
-        # Verify connection
-        if not self.client.ping():
+        self._wait_for_connection()
+        is_healthy = self.client.ping()
+        print(is_healthy)   
+        if not is_healthy:
             raise ConnectionError("Failed to connect to Elasticsearch")
-    
+        self.create_index()
+
+    def _wait_for_connection(self, retries: int = 10, delay: float = 2.0) -> None:
+        last_error: Optional[Exception] = None
+        for attempt in range(1, retries + 1):
+            try:
+                if self.client.ping():
+                    return
+            except Exception as exc:
+                last_error = exc
+            time.sleep(delay)
+        message = "Failed to connect to Elasticsearch after multiple attempts"
+        if last_error:
+            message += f": {last_error}"
+        raise ConnectionError(message)
+
     def create_index(self, index_name: Optional[str] = None) -> bool:
         """
         Create an index for storing academic papers with proper mapping for hybrid search.

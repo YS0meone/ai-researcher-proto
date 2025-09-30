@@ -63,6 +63,12 @@ Then start the elastic search and grobid container using
 docker-compose up -d
 ```
 
+If it doesn't work, try
+
+```bash
+docker compose up -d
+```
+
 In the backend folder run
 
 ```bash

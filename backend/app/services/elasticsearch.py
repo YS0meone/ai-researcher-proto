@@ -39,6 +39,16 @@ class ElasticsearchService:
             message += f": {last_error}"
         raise ConnectionError(message)
 
+    def get_paper(self, arxiv_id: str, index_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        target_index = index_name or self.index
+        try:
+            resp = self.client.get(index=target_index, id=arxiv_id)
+            src = resp.get('_source', {}) or {}
+            return {"id": arxiv_id, **src}
+        except Exception as e:
+            print(f"Error fetching paper {arxiv_id}: {e}")
+            return None
+            
     def create_index(self, index_name: Optional[str] = None) -> bool:
         """
         Create an index for storing academic papers with proper mapping for hybrid search.

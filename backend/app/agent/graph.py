@@ -1,241 +1,238 @@
-from typing import Annotated
+from typing import Annotated, List, Dict, Any, Optional, Literal
 from typing_extensions import TypedDict
 from langchain.chat_models import init_chat_model
 from langchain.schema import SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from app.tools.search import (
-    search_papers, 
-    hybrid_search_papers, 
-    semantic_search_papers, 
-    keyword_search_papers,
-    search_papers_by_category
-)
 
 from app.core.config import settings
-
-model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
-model = model.bind_tools([
-    hybrid_search_papers,  # Primary search tool
-    semantic_search_papers,  # For conceptual searches
-    keyword_search_papers,   # For exact term matching
-    search_papers_by_category,  # For category browsing
-    search_papers  # Keep the original for backward compatibility
-])
-
-SYSTEM_PROMPT = """You are an AI research assistant specialized in academic paper search and analysis, with access to a comprehensive database of ArXiv papers.
-
-## Core Principles:
-- **Think before searching**: Analyze the user's query carefully to select the most appropriate tool
-- **Avoid redundant searches**: Don't repeat the same search with different tools unless specifically needed
-- **Start narrow, then broaden**: Begin with the most precise tool, then expand if results are insufficient
-- **Explain your choices**: Briefly mention which tool you're using and why
-
-## Your Advanced Search Capabilities:
-
-### 🔍 **hybrid_search_papers** (PRIMARY TOOL - Default Choice)
-**When to use:**
-- General research questions without specific constraints
-- When you want comprehensive coverage of a topic
-- User asks broad questions like "papers about X" or "research on Y"
-- First search on any new topic
-
-**When NOT to use:**
-- User explicitly asks for exact matches or specific authors
-- Query is about browsing a specific field/category
-- You need purely conceptual/semantic relationships
-
-**Strengths:** Balances keyword precision with semantic understanding
-**Example queries:** "machine learning interpretability", "transformer attention mechanisms", "few-shot learning methods"
-
----
-
-### 🧠 **semantic_search_papers** (Conceptual Discovery)
-**When to use:**
-- User asks about concepts, ideas, or approaches (not specific terms)
-- Finding papers with similar methodologies or theoretical foundations
-- Queries like "papers similar to...", "what approaches exist for...", "conceptually related to..."
-- Discovering novel or alternative perspectives on a topic
-- When keyword matching might miss relevant papers due to terminology differences
-
-**When NOT to use:**
-- As your first search (prefer hybrid_search first)
-- When specific authors, paper titles, or exact terms are mentioned
-- When keywords are well-defined and sufficient
-
-**Configuration:**
-- Specify search_field: "title" for high-level topic matching, "abstract" for detailed concept matching
-- Default to "abstract" for more comprehensive semantic matching
-
-**Example queries:** "novel approaches to attention mechanisms", "alternative methods for model compression"
-
----
-
-### 🎯 **keyword_search_papers** (Exact Matching)
-**When to use:**
-- User mentions specific author names: "papers by Yoshua Bengio"
-- Exact paper titles or specific technical terms: "BERT", "ResNet"
-- Precise phrases that must appear verbatim
-- When you need to verify existence of specific terminology
-- Follow-up searches after hybrid search to narrow down results
-
-**When NOT to use:**
-- As your first search attempt on a general topic
-- When user query is conceptual or exploratory
-- When synonyms or related terms would be valuable
-
-**Strengths:** Fast, precise, no false positives from semantic similarity
-**Example queries:** "author:Bengio", "GPT-4", "exact phrase matching"
-
----
-
-### 📚 **search_papers_by_category** (Domain Exploration)
-**When to use:**
-- User wants to browse or explore a specific ArXiv category
-- Queries like "recent papers in NLP", "latest computer vision research"
-- Getting an overview of a field
-- When category is more important than topic keywords
-
-**When NOT to use:**
-- User has a specific research question (use hybrid_search instead)
-- Looking for papers on a particular topic across multiple categories
-
-**Common categories:**
-- cs.CL: Computational Linguistics (NLP)
-- cs.AI: Artificial Intelligence
-- cs.LG: Machine Learning
-- cs.CV: Computer Vision
-- cs.RO: Robotics
-- stat.ML: Statistics - Machine Learning
-
-**Example queries:** "browse recent cs.CL papers", "what's new in computer vision"
-
----
-
-## Decision Framework - Think Through These Steps:
-
-**Step 1: Query Analysis**
-- Is the user looking for a specific paper, author, or exact term? → `keyword_search_papers`
-- Is the user browsing a field or category? → `search_papers_by_category`
-- Is the query conceptual or exploratory without specific keywords? → Consider `semantic_search_papers`
-- Is this a general research question? → `hybrid_search_papers` (default)
-
-**Step 2: Tool Selection Logic**
-```
-IF query contains author names OR exact paper titles:
-    → Use keyword_search_papers
-ELIF query is "recent papers in [category]" OR "browse [field]":
-    → Use search_papers_by_category
-ELIF query is highly conceptual OR asks for "similar approaches" OR "alternative methods":
-    → Consider semantic_search_papers (but hybrid_search is often sufficient)
-ELSE:
-    → Use hybrid_search_papers (default for most queries)
-```
-
-**Step 3: Follow-up Strategy**
-- If hybrid_search returns insufficient results (< 3 relevant papers):
-  - Try semantic_search_papers for broader conceptual matches
-  - OR try different keywords with keyword_search_papers
-- If too many results (> 20): Narrow with category filters or more specific terms
-- Don't repeat the same search with multiple tools without good reason
-
-**Step 4: Category Filtering (Cross-cutting)**
-- ALWAYS consider adding category filters to any search for better precision
-- Common combinations: "cs.CL,cs.AI" (NLP+AI), "cs.LG,stat.ML" (ML), "cs.CV,cs.AI" (Vision+AI)
-- Use category filters to reduce noise in broad searches
-
----
-
-## Response Guidelines:
-
-**For Each Paper, Provide:**
-- **Title** (clear and complete)
-- **Authors** (first author + "et al." if many)
-- **ArXiv ID** and **clickable URL** (format: https://arxiv.org/abs/XXXX.XXXXX)
-- **Brief summary** (1-2 sentences on key contribution)
-- **Relevance score** (if provided by the tool, helps user prioritize)
-
-**Overall Response Structure:**
-1. **Briefly explain your search strategy** (1 sentence on which tool and why)
-2. **Present results** (organized by relevance or grouped by theme)
-3. **Provide context** (how these papers relate to the query)
-4. **Suggest follow-up** (optional: other searches or related topics to explore)
-
-**Quality Standards:**
-- Synthesize findings across papers when patterns emerge
-- Highlight seminal/highly-cited works when relevant
-- Note if results are limited and explain why
-- If no good results: suggest alternative search terms or approaches
-
----
-
-## Examples of Good Tool Selection:
-
-**Query:** "papers about attention mechanisms in transformers"
-**Decision:** Use `hybrid_search_papers` → General topic, want both keyword relevance and semantic understanding
-
-**Query:** "papers by Geoffrey Hinton on deep learning"
-**Decision:** Use `keyword_search_papers` → Specific author name mentioned
-
-**Query:** "what are alternative approaches to backpropagation?"
-**Decision:** Use `semantic_search_papers` on abstracts → Conceptual query about alternatives/approaches
-
-**Query:** "recent NLP papers"
-**Decision:** Use `search_papers_by_category` with cs.CL → Browsing a field
-
-**Query:** "find papers similar to 'Attention Is All You Need'"
-**Decision:** First use `keyword_search_papers` to find the paper, then `semantic_search_papers` using its abstract for similar work
-
----
-
-## Important Reminders:
-- **One search at a time**: Don't chain multiple searches unless results are inadequate
-- **Explain your reasoning**: Let users know which tool you chose and why
-- **Be resource-conscious**: Each search has a cost; make them count
-- **Learn from results**: If a search yields poor results, adjust strategy rather than trying all tools
-- **Respect user intent**: If user asks for a specific search type, honor that request
-
-Be thoughtful, efficient, and help users discover the most relevant research with minimal redundant searches."""
-class State(TypedDict):
-    # Messages have the type "list". The `add_messages` function
-    # in the annotation defines how this state key should be updated
-    # (in this case, it appends messages to the list, rather than overwriting them)
-    messages: Annotated[list, add_messages]
-
-graph_builder = StateGraph(State)
-
-def chatbot(state: State):
-    # Add system prompt if this is the first interaction
-    messages = state["messages"]
-    if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-    
-    return {"messages": [model.invoke(messages)]}
-
-def should_continue(state: State):
-    messages = state['messages']
-    last_message = messages[-1]
-    # If the LLM makes a tool call, then we route to the "tools" node
-    if last_message.tool_calls:
-        return "tools"
-    # Otherwise, we stop (reply to the user)
-    return END
-
-# Define the tool node with all available search tools
-tools = ToolNode([
+from app.tools.search import (
     hybrid_search_papers,
-    semantic_search_papers, 
+    semantic_search_papers,
     keyword_search_papers,
     search_papers_by_category,
-    search_papers
+    search_papers,
+    get_paper_details,  # new
+)
+
+model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    papers: List[Dict[str, Any]]
+    search_queries: List[str]
+    iter: int
+    max_iters: int
+    coverage_score: float
+    route: Optional[Literal["search","synthesize"]]
+
+BASE_SYS = "You are an AI research assistant. Think step-by-step, minimize cost, and avoid redundant searches."
+
+def init_state(state: State) -> State:
+    msgs = state["messages"]
+    if not msgs or not isinstance(msgs[0], SystemMessage):
+        msgs = [SystemMessage(content=BASE_SYS)] + msgs
+    # Defaults
+    state.setdefault("papers", [])
+    state.setdefault("search_queries", [])
+    state.setdefault("iter", 0)
+    state.setdefault("max_iters", 3)
+    state.setdefault("coverage_score", 0.0)
+    state["messages"] = msgs
+    return state
+
+def router(state: State) -> Dict:
+    user_msg = state["messages"][-1].content if state["messages"] else ""
+    prompt = f"""
+Decide whether to SEARCH or SYNTHESIZE now.
+Consider: if the user asks for facts grounded in papers or unknown coverage, choose SEARCH.
+Return JSON with fields: route ("search"|"synthesize"), short_reason.
+User: {user_msg}
+"""
+    out = model.invoke([*state["messages"], {"role":"user","content":prompt}])
+    route = "search" if "search" in str(out.content).lower() else "synthesize"
+    return {"route": route, "messages": [out]}
+
+def generate_queries(state: State) -> Dict:
+    user_msg = state["messages"][-1].content if state["messages"] else ""
+    prompt = f"""
+Generate 2-4 diversified search queries for tools (hybrid/semantic/keyword/category) for the user intent.
+Return as JSON list 'queries'. Avoid duplicates and overly generic terms.
+User: {user_msg}
+Current queries: {state.get("search_queries")}
+"""
+    out = model.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content":prompt}])
+    # naive parse; improve with structured output parser if desired
+    import json, re
+    text = str(out.content)
+    try:
+        queries = json.loads(re.search(r"\[.*\]", text, re.S).group(0))
+    except Exception:
+        queries = []
+        for line in text.splitlines():
+            if line.strip() and len(queries) < 4:
+                queries.append(line.strip("- ").strip())
+    # merge & dedupe
+    seen = set(q.lower() for q in state["search_queries"])
+    merged = state["search_queries"] + [q for q in queries if q and q.lower() not in seen]
+    return {"search_queries": merged[:6], "messages": [out]}
+
+search_tools = ToolNode([
+    hybrid_search_papers,
+    semantic_search_papers,
+    keyword_search_papers,
+    search_papers_by_category,
+    search_papers,
 ])
 
-graph_builder.add_node("chatbot", chatbot)
-graph_builder.add_node("tools", tools)
+def call_search_tools(state: State) -> Dict:
+    # Let the model pick tools per query sequentially
+    # In each round, we nudge it to choose the best tool and produce a single tool call
+    queries = state["search_queries"][-2:] or state["search_queries"]
+    tool_bound = model.bind_tools([
+        hybrid_search_papers,
+        semantic_search_papers,
+        keyword_search_papers,
+        search_papers_by_category,
+        search_papers,
+    ])
+    all_results: List[Dict[str, Any]] = []
+    tool_msgs = []
+    for q in queries:
+        choose = f"""
+Choose ONE best tool for this query and call it. Query: "{q}"
+Tool guidance: hybrid (default), semantic (conceptual), keyword (exact names/phrases), category (browse).
+Return only the tool call.
+"""
+        m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content":choose}])
+        tool_msgs.append(m)
+        if not m.tool_calls:
+            continue
+        # Let ToolNode execute; emulate minimal execution here by returning the tool-calls
+        # LangGraph will route to ToolNode next
+    return {"messages": tool_msgs}
 
-graph_builder.add_edge(START, "chatbot")
-graph_builder.add_conditional_edges("chatbot", should_continue)
-graph_builder.add_edge("tools", "chatbot")
+def merge_and_rerank(state: State) -> Dict:
+    # Collect the last tool outputs from messages
+    candidates: List[Dict[str, Any]] = []
+    for m in state["messages"]:
+        if isinstance(m, dict) and m.get("type") == "tool" and isinstance(m.get("content"), list):
+            for item in m["content"]:
+                if isinstance(item, dict) and item.get("arxiv_id"):
+                    candidates.append(item)
+        # fallback for tool outputs serialized differently
+        if hasattr(m, "content") and isinstance(m.content, list):
+            for item in m.content:
+                if isinstance(item, dict) and item.get("arxiv_id"):
+                    candidates.append(item)
 
+    # Deduplicate by arxiv_id and keep best score
+    seen = {p["arxiv_id"]: p for p in state["papers"]}
+    for c in candidates:
+        aid = c["arxiv_id"]
+        prev = seen.get(aid)
+        if not prev:
+            seen[aid] = c
+        else:
+            def best(a, b, key):
+                sa, sb = a.get(key), b.get(key)
+                if sa is None: return b
+                if sb is None: return a
+                return a if sa >= sb else b
+            seen[aid] = best(prev, c, "search_score" if "search_score" in c else ("similarity_score" if "similarity_score" in c else "text_score"))
+
+    merged = list(seen.values())[:100]
+
+    # Rerank with LLM (title+abstract snippet) and compute coverage heuristic
+    user_msg = state["messages"][-1].content if state["messages"] else ""
+    short_list = merged[:30]
+    prompt = f"""
+Rerank these candidate papers for answering the user query.
+Return JSON with fields:
+- order: list of arxiv_id sorted by descending relevance
+- coverage_score: float between 0 and 1 indicating how sufficient the top-10 are to answer.
+
+User: {user_msg}
+Candidates (id, title, abstract<=400):
+{[{ 'id': p.get('arxiv_id'), 'title': p.get('title'), 'abstract': (p.get('abstract','') or '')[:400] } for p in short_list]}
+"""
+    out = model.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content":prompt}])
+    import json, re
+    order: List[str] = []
+    coverage = 0.0
+    try:
+        j = json.loads(re.search(r"\{.*\}", str(out.content), re.S).group(0))
+        order = j.get("order", []) or []
+        coverage = float(j.get("coverage_score", 0))
+    except Exception:
+        order = [p.get("arxiv_id") for p in short_list]
+
+    id_to_p = {p["arxiv_id"]: p for p in merged}
+    reranked = [id_to_p[i] for i in order if i in id_to_p] + [p for p in merged if p["arxiv_id"] not in set(order)]
+    return {"papers": reranked[:50], "coverage_score": coverage, "messages": [out]}
+
+def decide_next(state: State):
+    if state["coverage_score"] >= 0.65 or state["iter"] + 1 >= state["max_iters"]:
+        return "synthesize"
+    return "search_more"
+
+def increment_iter(state: State) -> Dict:
+    return {"iter": state["iter"] + 1}
+
+def synthesize(state: State) -> Dict:
+    # pick top-k IDs
+    top_ids = [p["arxiv_id"] for p in state["papers"][:10]]
+    # Ask tools for details
+    tool_bound = model.bind_tools([get_paper_details])
+    m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content": f"Fetch details for: {top_ids}"}])
+    # After tool executes, produce final grounded answer
+    answer_prompt = f"""
+Write a concise, well-structured answer grounded in the provided papers. Cite arXiv IDs inline like [arXiv:XXXX.XXXXX].
+If evidence is weak, state limitations and suggest follow-ups.
+"""
+    final = model.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content": answer_prompt}])
+    return {"messages": [m, final]}
+
+# Build graph
+graph_builder = StateGraph(State)
+graph_builder.add_node("init", init_state)
+graph_builder.add_node("router", router)
+graph_builder.add_node("generate_queries", generate_queries)
+graph_builder.add_node("call_search_tools", call_search_tools)
+graph_builder.add_node("tools", ToolNode([
+    hybrid_search_papers,
+    semantic_search_papers,
+    keyword_search_papers,
+    search_papers_by_category,
+    search_papers,
+    get_paper_details,
+]))
+graph_builder.add_node("merge_and_rerank", merge_and_rerank)
+graph_builder.add_node("increment_iter", increment_iter)
+graph_builder.add_node("synthesize", synthesize)
+
+graph_builder.add_edge(START, "init")
+graph_builder.add_edge("init", "router")
+
+def route_branch(state: State):
+    return "search" if state.get("route") == "search" else "synthesize"
+
+graph_builder.add_conditional_edges("router", route_branch, {
+    "search": "generate_queries",
+    "synthesize": "synthesize",
+})
+
+# Search loop
+graph_builder.add_edge("generate_queries", "call_search_tools")
+graph_builder.add_edge("call_search_tools", "tools")
+graph_builder.add_edge("tools", "merge_and_rerank")
+
+graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
+    "search_more": "increment_iter",
+    "synthesize": "synthesize",
+})
+graph_builder.add_edge("increment_iter", "generate_queries")
+
+graph_builder.add_edge("synthesize", END)
 graph = graph_builder.compile()

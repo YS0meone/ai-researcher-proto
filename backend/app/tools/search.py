@@ -272,3 +272,25 @@ def search_papers_by_category(
         
     except Exception as e:
         return [{"error": f"Category search failed: {str(e)}"}]
+
+@tool
+def get_paper_details(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fetch full details for a list of arXiv IDs to ground synthesis.
+    """
+    es = ElasticsearchService(settings.elasticsearch_config)
+    out: List[Dict[str, Any]] = []
+    for pid in arxiv_ids:
+        doc = es.get_paper(pid)
+        if doc:
+            out.append({
+                "arxiv_id": pid,
+                "title": doc.get("title"),
+                "authors": doc.get("authors"),
+                "abstract": doc.get("abstract"),
+                "categories": doc.get("categories"),
+                "doi": doc.get("doi"),
+                "journal_ref": doc.get("journal-ref"),
+                "url": f"https://arxiv.org/abs/{pid}",
+            })
+    return out

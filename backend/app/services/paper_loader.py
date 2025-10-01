@@ -136,7 +136,7 @@ class PaperLoader:
         #     file_name = re.sub(r'[<>:"/\\|?*]', '_', result.title.replace(" ", "_"))
         #     result.download_pdf(dirpath=self.config.output_dir, filename=file_name+".pdf")
     
-    def load_by_metadata(self, categories_filter: List[str] = None):
+    def load_by_metadata(self, categories_filter: List[str] = None, limit: int = None):
         """
         Load papers from JSON file and index them into Elasticsearch.
         
@@ -145,7 +145,6 @@ class PaperLoader:
             categories_filter: Optional list of categories to filter (e.g., ['cs.CL', 'cs.AI'])
             limit: Optional limit on number of papers to process
         """
-        limit = self.config.batch_size * self.config.workers
         json_path = self.config.arxiv_metadata_path
         if not self.elasticsearch_service:
             raise RuntimeError("Elasticsearch service not initialized")
@@ -174,8 +173,8 @@ class PaperLoader:
                 papers_batch.append(paper)
                 processed += 1
                 
-                # Index in batches of 100
-                if len(papers_batch) >= 100:
+                # Index in batches of 50
+                if len(papers_batch) >= 50:
                     result = self.elasticsearch_service.add_papers_bulk(papers_batch)
                     print(f"Indexed batch: {result}")
                     papers_batch = []

@@ -36,7 +36,8 @@ class Settings(BaseSettings):
         validate_assignment=True,
         case_sensitive=False
     )
-
+    LANGSMITH_TRACING: bool
+    LANGSMITH_API_KEY: str
     OPENAI_API_KEY: str
 
     DATABASE_URL: str

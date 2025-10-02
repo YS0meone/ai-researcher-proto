@@ -5,7 +5,6 @@ from langchain.schema import SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-
 from app.core.config import settings
 from app.tools.search import (
     hybrid_search_papers,
@@ -13,8 +12,12 @@ from app.tools.search import (
     keyword_search_papers,
     search_papers_by_category,
     search_papers,
-    get_paper_details,  # new
+    get_paper_details,
 )
+import logging
+import pprint
+
+logger = logging.getLogger(__name__)
 
 model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
 
@@ -78,13 +81,7 @@ Current queries: {state.get("search_queries")}
     merged = state["search_queries"] + [q for q in queries if q and q.lower() not in seen]
     return {"search_queries": merged[:6], "messages": [out]}
 
-search_tools = ToolNode([
-    hybrid_search_papers,
-    semantic_search_papers,
-    keyword_search_papers,
-    search_papers_by_category,
-    search_papers,
-])
+ 
 
 def call_search_tools(state: State) -> Dict:
     # Let the model pick tools per query sequentially
@@ -99,18 +96,16 @@ def call_search_tools(state: State) -> Dict:
     ])
     all_results: List[Dict[str, Any]] = []
     tool_msgs = []
-    for q in queries:
-        choose = f"""
-Choose ONE best tool for this query and call it. Query: "{q}"
+    query = queries[0]
+    choose = f"""
+Choose ONE best tool for this query and call it. Query: "{query}"
 Tool guidance: hybrid (default), semantic (conceptual), keyword (exact names/phrases), category (browse).
 Return only the tool call.
 """
-        m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content":choose}])
-        tool_msgs.append(m)
-        if not m.tool_calls:
-            continue
-        # Let ToolNode execute; emulate minimal execution here by returning the tool-calls
-        # LangGraph will route to ToolNode next
+    m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *state["messages"], {"role":"user","content":choose}])
+    tool_msgs.append(m)
+    # Let ToolNode execute; emulate minimal execution here by returning the tool-calls
+    # LangGraph will route to ToolNode next
     return {"messages": tool_msgs}
 
 def merge_and_rerank(state: State) -> Dict:

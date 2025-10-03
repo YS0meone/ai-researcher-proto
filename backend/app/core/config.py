@@ -23,10 +23,12 @@ class PaperLoaderConfig(BaseModel):
     use_postgres: bool
     arxiv_metadata_path: str
     
-class WeaviateConfig(BaseModel):
+class QdrantConfig(BaseModel):
     url: str
-    api_key: str
-
+    vector_size: int
+    collection: str
+    distance: str
+    output_dir: str
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -64,8 +66,10 @@ class Settings(BaseSettings):
     LOADER_USE_POSTGRES: bool
     LOADER_ARXIV_METADATA_PATH: str
 
-    WEAVIATE_URL: str
-    WEAVIATE_API_KEY: str
+    QDRANT_URL: str
+    QDRANT_VECTOR_SIZE: int
+    QDRANT_COLLECTION: str
+    QDRANT_DISTANCE: str
 
     @property 
     def database_config(self) -> DatabaseConfig:
@@ -98,10 +102,13 @@ class Settings(BaseSettings):
         )
 
     @property
-    def weaviate_config(self) -> WeaviateConfig:
-        return WeaviateConfig(
-            url=self.WEAVIATE_URL,
-            api_key=self.WEAVIATE_API_KEY
+    def qdrant_config(self) -> QdrantConfig:
+        return QdrantConfig(
+            url=self.QDRANT_URL,
+            vector_size=self.QDRANT_VECTOR_SIZE,
+            collection=self.QDRANT_COLLECTION,
+            distance=self.QDRANT_DISTANCE,
+            output_dir=self.LOADER_OUTPUT_DIR,
         )
 
 settings = Settings()

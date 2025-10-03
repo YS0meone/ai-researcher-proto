@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import yaml
 from app.core.config import settings, PaperLoaderConfig
+from app.services.qdrant import QdrantService
 from .elasticsearch import ElasticsearchService
 import json
 from typing import Optional, List
@@ -53,6 +54,7 @@ class PaperLoader:
         # lazy init elasticsearch service
         if not self.config.use_postgres:
             self.elasticsearch_service = ElasticsearchService(settings.elasticsearch_config)
+        self.qdrant_service = QdrantService(settings.qdrant_config)
     
     def load_by_search(self, query: str):
         params = [None] * self.config.workers
@@ -110,35 +112,10 @@ class PaperLoader:
                     skip -= 1
                 line_index.append(file.tell())
             return line_index
-
-    # def metadata_workers(self, i: int, offset: int):
-    #     with open(self.config.arxiv_metadata_path, 'r', encoding='utf-8') as file:
-    #         file.seek(offset)
-    #         for _ in range(self.config.batch_size):
-    #             line = file.readline()
-
-
-    # def load_by_metadata(self):
-        # if not self.config.arxiv_metadata_path:
-        #     raise ValueError("arxiv_metadata_path is required")
-        # id_list = []
-        # cnt = self.config.batch_size * self.config.workers
-        # for item in filter_json_stream(self.config.arxiv_metadata_path, ['cs.CL']):
-        #     id_list.append(item['id'])
-        #     cnt -= 1
-        #     if cnt == 0:
-        #         break
-
-        # client = arxiv.Client()
-        # search = arxiv.Search(id_list=id_list)
-        # results = client.results(search)
-        # for result in results:
-        #     file_name = re.sub(r'[<>:"/\\|?*]', '_', result.title.replace(" ", "_"))
-        #     result.download_pdf(dirpath=self.config.output_dir, filename=file_name+".pdf")
     
     def load_by_metadata(self, categories_filter: List[str] = None, limit: int = None):
         """
-        Load papers from JSON file and index them into Elasticsearch.
+        Load papers from JSON file and index them into Elasticsearch and Qdrant.
         
         Args:
             json_path: Path to the ArXiv JSON file
@@ -170,13 +147,16 @@ class PaperLoader:
                     license=paper_data.get('license')
                 )
                 
+                
                 papers_batch.append(paper)
                 processed += 1
                 
                 # Index in batches of 50
                 if len(papers_batch) >= 50:
-                    result = self.elasticsearch_service.add_papers_bulk(papers_batch)
-                    print(f"Indexed batch: {result}")
+                    result = self.elasticsearch_service.add_papers_batch(papers_batch)
+                    print(f"Added to Elasticsearch: {result}")
+                    result = self.qdrant_service.add_papers_batch(papers_batch)
+                    print(f"Added to Qdrant")
                     papers_batch = []
                 
                 if limit and processed >= limit:
@@ -188,8 +168,10 @@ class PaperLoader:
         
         # Index remaining papers
         if papers_batch:
-            result = self.elasticsearch_service.add_papers_bulk(papers_batch)
-            print(f"Indexed final batch: {result}")
+            result = self.elasticsearch_service.add_papers_batch(papers_batch)
+            print(f"Added to Elasticsearch: {result}")
+            result = self.qdrant_service.add_papers_batch(papers_batch)
+            print(f"Added to Qdrant")
         
         print(f"Total papers processed: {processed}")
         

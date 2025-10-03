@@ -105,6 +105,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aira-qdrant
+    restart: always
+    ports:
+      - "6333:6333"   # REST
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
 
 volumes:
   esdata01:
@@ -112,4 +121,6 @@ volumes:
   kibanadata:
     driver: local
   postgres_data:
+    driver: local
+  qdrant_data:
     driver: local

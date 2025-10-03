@@ -25,4 +25,6 @@ dependencies = [
     "asyncpg>=0.30.0",
     "elasticsearch>=9.1.1",
     "sentence-transformers>=5.1.0",
+    "langchain-qdrant>=0.2.1",
+    "langchain-huggingface>=0.3.1",
 ]

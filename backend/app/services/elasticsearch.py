@@ -264,7 +264,7 @@ class ElasticsearchService:
             print(f"Error indexing paper {paper.id}: {str(e)}")
             return False
 
-    def add_papers_bulk(self, papers: List['ArxivPaper'], index_name: Optional[str] = None) -> Dict[str, int]:
+    def add_papers_batch(self, papers: List['ArxivPaper'], index_name: Optional[str] = None) -> Dict[str, int]:
         """
         Bulk add multiple papers to the Elasticsearch index.
         
@@ -346,7 +346,7 @@ class ElasticsearchService:
         Returns:
             Dict with success and error counts
         """
-        return self.add_papers_bulk(batch.papers, index_name)
+        return self.add_papers_batch(batch.papers, index_name)
     
     def hybrid_search(
         self, 

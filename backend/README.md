@@ -53,6 +53,10 @@ uv run langgraph dev
 
 The LangGraph development server will start on `http://localhost:2024` by default.
 
+### 4. Download arXiv Dataset metadata
+
+Go to [https://www.kaggle.com/datasets/Cornell-University/arxiv/data](https://www.kaggle.com/datasets/Cornell-University/arxiv/data) and download the entire metadata JSON. Note that while we are downloading the entire metadata, the data pipeline will only index annd use papers in the NLP domain. In the future we will include a programmatic way to download the metadata JSON and filter effectively.
+
 ### 5. Run the data pipeline
 
 First make sure you have copy the `.env.example` file in both the backend and project root and create your own `.env` file. Especially, make sure you have the arxiv dataset downloaded and its path configured in the environment variable.

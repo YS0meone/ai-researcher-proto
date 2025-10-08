@@ -101,4 +101,46 @@ class QdrantService:
 
         self.vector_store.add_documents(docs)
         logging.info(f"Added {len(papers)} papers to Qdrant")
+    
+    def search(self, query: str, k: int = 10, score_threshold: float = None) -> list[tuple[ArxivPaper, float]]:
+        """
+        Search for papers relevant to the query.
+        
+        Args:
+            query: The search query string
+            k: Number of results to return (default: 10)
+            score_threshold: Optional minimum similarity score threshold
+            
+        Returns:
+            List of tuples (ArxivPaper, score) with supporting_detail field filled with retrieved segments
+        """
+        # Perform similarity search with scores
+        if score_threshold is not None:
+            docs_and_scores = self.vector_store.similarity_search_with_score(
+                query, 
+                k=k,
+                score_threshold=score_threshold
+            )
+        else:
+            docs_and_scores = self.vector_store.similarity_search_with_score(query, k=k)
+        
+        # Convert documents to ArxivPaper objects
+        results = []
+        for doc, score in docs_and_scores:
+            # Extract paper metadata
+            metadata = doc.metadata.copy()
+            
+            # Add the retrieved segment as supporting_detail
+            metadata['supporting_detail'] = doc.page_content
+            
+            # Create ArxivPaper object from metadata
+            try:
+                paper = ArxivPaper(**metadata)
+                results.append((paper, score))
+            except Exception as e:
+                logger.warning(f"Failed to create ArxivPaper from metadata: {e}")
+                continue
+        
+        logger.info(f"Found {len(results)} papers for query: {query[:50]}...")
+        return results
         

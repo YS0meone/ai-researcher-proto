@@ -19,6 +19,7 @@ class ArxivPaper(BaseModel):
     report_no: Optional[str] = Field(None, alias="report-no", description="Report number")
     categories: str = Field(..., description="Space-separated categories (e.g., 'hep-ph')")
     license: Optional[str] = Field(None, description="License information")
+    supporting_detail: Optional[str] = Field(None, description="Supporting detail")
     
     # Additional fields for our system
     submission_date: Optional[datetime] = Field(None, description="Date of submission")

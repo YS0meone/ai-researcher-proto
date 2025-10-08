@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 from app.db.models import Paper
 from app.db.session import AsyncSessionLocal
 from app.services.elasticsearch import ElasticsearchService
+from app.services.qdrant import QdrantService
 from app.core.config import settings
 
 
@@ -294,3 +295,66 @@ def get_paper_details(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
                 "url": f"https://arxiv.org/abs/{pid}",
             })
     return out
+
+
+@tool
+def vector_search_papers(
+    query: str,
+    limit: int = 10,
+    score_threshold: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using deep semantic vector search with full-text content retrieval.
+    
+    This tool uses specialized scientific paper embeddings (SPECTER) to find papers
+    by semantic similarity against full paper content (not just title/abstract).
+    Returns relevant text segments from papers that match the query.
+    
+    Args:
+        query: Describe the specific concepts, methods, or findings you're looking for
+        limit: Maximum number of results to return (default: 10, max: 30)
+        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results
+    
+    Returns:
+        List of papers with relevant text segments and similarity scores
+    """
+    try:
+        # Initialize Qdrant service
+        qdrant_service = QdrantService(settings.qdrant_config)
+        
+        # Perform vector search
+        results = qdrant_service.search(
+            query=query,
+            k=min(limit, 30),
+            score_threshold=score_threshold
+        )
+        
+        # Format results
+        formatted_results = []
+        for paper, score in results:
+            # Truncate abstract if too long
+            abstract = paper.abstract
+            if len(abstract) > 400:
+                abstract = abstract[:400] + '...'
+            
+            # Truncate supporting detail if too long
+            supporting_detail = paper.supporting_detail or ""
+            if len(supporting_detail) > 500:
+                supporting_detail = supporting_detail[:500] + '...'
+            
+            formatted_result = {
+                'arxiv_id': paper.id,
+                'title': paper.title,
+                'authors': paper.authors,
+                'abstract': abstract,
+                'categories': paper.categories,
+                'supporting_detail': supporting_detail,
+                'similarity_score': round(float(score), 3),
+                'url': f"https://arxiv.org/abs/{paper.id}"
+            }
+            formatted_results.append(formatted_result)
+        
+        return formatted_results
+        
+    except Exception as e:
+        return [{"error": f"Vector search failed: {str(e)}"}]

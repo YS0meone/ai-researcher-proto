@@ -1,5 +1,4 @@
 from typing import Annotated, List, Dict, Any, Optional, Literal
-from typing_extensions import TypedDict
 from langchain.chat_models import init_chat_model
 from langchain.schema import SystemMessage
 from langgraph.graph import StateGraph, START, END
@@ -13,7 +12,9 @@ from app.tools.search import (
     search_papers_by_category,
     search_papers,
     get_paper_details,
+    vector_search_papers,
 )
+from pydantic import BaseModel, Field
 import logging
 import pprint
 
@@ -21,14 +22,14 @@ logger = logging.getLogger(__name__)
 
 model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
 
-class State(TypedDict):
-    messages: Annotated[list, add_messages]
-    papers: List[Dict[str, Any]]
-    search_queries: List[str]
-    iter: int
-    max_iters: int
-    coverage_score: float
-    route: Optional[Literal["search","synthesize"]]
+class State(BaseModel):
+    messages: Annotated[list, add_messages] = Field(default_factory=list)
+    papers: List[Dict[str, Any]] = Field(default_factory=list)
+    search_queries: List[str] = Field(default_factory=list)
+    iter: int = Field(default=0)
+    max_iters: int = Field(default=3)
+    coverage_score: float = Field(default=0.0)
+    route: Optional[Literal["search","synthesize"]] = Field(default=None)
 
 BASE_SYS = "You are an AI research assistant. Think step-by-step, minimize cost, and avoid redundant searches."
 
@@ -77,41 +78,29 @@ def get_user_query(messages: list) -> str:
             user_msg = m["content"]
     return user_msg
 
-def init_state(state: State) -> State:
-    msgs = state["messages"]
-    if not msgs or not isinstance(msgs[0], SystemMessage):
-        msgs = [SystemMessage(content=BASE_SYS)] + msgs
-    # Defaults
-    state.setdefault("papers", [])
-    state.setdefault("search_queries", [])
-    state.setdefault("iter", 0)
-    state.setdefault("max_iters", 3)
-    state.setdefault("coverage_score", 0.0)
-    state["messages"] = msgs
-    return state
 
 def router(state: State) -> Dict:
-    user_msg = get_user_query(state["messages"])
+    user_msg = get_user_query(state.messages)
     prompt = f"""
 Decide whether to SEARCH or SYNTHESIZE now.
 Consider: if the user asks for facts grounded in papers or unknown coverage, choose SEARCH.
 Return JSON with fields: route ("search"|"synthesize"), short_reason.
 User: {user_msg}
 """
-    clean_messages = filter_tool_messages(state["messages"])
+    clean_messages = filter_tool_messages(state.messages)
     out = model.invoke([*clean_messages, {"role":"user","content":prompt}])
     route = "search" if "search" in str(out.content).lower() else "synthesize"
     return {"route": route, "messages": [out]}
 
 def generate_queries(state: State) -> Dict:
-    user_msg = get_user_query(state["messages"])
+    user_msg = get_user_query(state.messages)
     prompt = f"""
 Generate 2-4 diversified search queries for tools (hybrid/semantic/keyword/category) for the user intent.
-Return as JSON list 'queries'. Avoid duplicates and overly generic terms.
+Return as JSON list 'queries'. Avoid duplicates.
 User: {user_msg}
-Current queries: {state.get("search_queries")}
+Current queries: {state.search_queries}
 """
-    clean_messages = filter_tool_messages(state["messages"])
+    clean_messages = filter_tool_messages(state.messages)
     out = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":prompt}])
     # naive parse; improve with structured output parser if desired
     import json, re
@@ -124,8 +113,8 @@ Current queries: {state.get("search_queries")}
             if line.strip() and len(queries) < 4:
                 queries.append(line.strip("- ").strip())
     # merge & dedupe
-    seen = set(q.lower() for q in state["search_queries"])
-    merged = state["search_queries"] + [q for q in queries if q and q.lower() not in seen]
+    seen = set(q.lower() for q in state.search_queries)
+    merged = state.search_queries + [q for q in queries if q and q.lower() not in seen]
     return {"search_queries": merged[:6], "messages": [out]}
 
  
@@ -133,21 +122,27 @@ Current queries: {state.get("search_queries")}
 def call_search_tools(state: State) -> Dict:
     # Let the model pick tools per query sequentially
     # In each round, we nudge it to choose the best tool and produce a single tool call
-    queries = state["search_queries"][-2:] or state["search_queries"]
+    queries = state.search_queries[-2:] or state.search_queries
     tool_bound = model.bind_tools([
         hybrid_search_papers,
         semantic_search_papers,
         keyword_search_papers,
         search_papers_by_category,
         search_papers,
+        vector_search_papers,
     ])
     all_results: List[Dict[str, Any]] = []
     tool_msgs = []
-    clean_messages = filter_tool_messages(state["messages"])
+    clean_messages = filter_tool_messages(state.messages)
     for q in queries:
         choose = f"""
 Choose ONE best tool for this query and call it. Query: "{q}"
-Tool guidance: hybrid (default), semantic (conceptual), keyword (exact names/phrases), category (browse).
+Tool guidance: 
+- hybrid (default for broad searches)
+- semantic (conceptual similarity in title/abstract)
+- vector_search (deep content search when specific details/methods/findings needed)
+- keyword (exact names/phrases)
+- category (browse by domain)
 Return only the tool call.
 """
         m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":choose}])
@@ -166,7 +161,7 @@ def merge_and_rerank(state: State) -> Dict:
     # print(f"\n=== MERGE_AND_RERANK DEBUG ===", file=sys.stderr)
     # print(f"Total messages in state: {len(state['messages'])}", file=sys.stderr)
     
-    for idx, m in enumerate(state["messages"]):
+    for idx, m in enumerate(state.messages):
         msg_type = getattr(m, 'type', None) or (m.get('type') if isinstance(m, dict) else None)
         msg_class = m.__class__.__name__
         # print(f"Message {idx}: type={msg_type}, class={msg_class}", file=sys.stderr)
@@ -200,10 +195,10 @@ def merge_and_rerank(state: State) -> Dict:
                     pass
     
     print(f"Total candidates found: {len(candidates)}", file=sys.stderr)
-    print(f"Existing papers in state: {len(state['papers'])}", file=sys.stderr)
+    print(f"Existing papers in state: {len(state.papers)}", file=sys.stderr)
 
     # Deduplicate by arxiv_id and keep best score
-    seen = {p["arxiv_id"]: p for p in state["papers"]}
+    seen = {p["arxiv_id"]: p for p in state.papers}
     for c in candidates:
         aid = c["arxiv_id"]
         prev = seen.get(aid)
@@ -222,7 +217,7 @@ def merge_and_rerank(state: State) -> Dict:
     print(f"Merged papers count: {len(merged)}", file=sys.stderr)
 
     # Rerank with LLM (title+abstract snippet) and compute coverage heuristic
-    user_msg = get_user_query(state["messages"])
+    user_msg = get_user_query(state.messages)
     short_list = merged[:30]
     
     print(f"Short list for reranking: {len(short_list)} papers", file=sys.stderr)
@@ -241,7 +236,7 @@ User: {user_msg}
 Candidates (id, title, abstract<=400):
 {[{ 'id': p.get('arxiv_id'), 'title': p.get('title'), 'abstract': (p.get('abstract','') or '')[:400] } for p in short_list]}
 """
-    clean_messages = filter_tool_messages(state["messages"])
+    clean_messages = filter_tool_messages(state.messages)
     out = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":prompt}])
     
     # print(f"LLM response: {str(out.content)[:500]}", file=sys.stderr)
@@ -268,40 +263,111 @@ Candidates (id, title, abstract<=400):
     return {"papers": reranked[:50], "coverage_score": coverage, "messages": [out]}
 
 def decide_next(state: State):
-    if state["coverage_score"] >= 0.65 or state["iter"] + 1 >= state["max_iters"]:
-        return "synthesize"
-    return "search_more"
+    # if state["coverage_score"] >= 0.65 or state["iter"] + 1 >= state["max_iters"]:
+    #     return "synthesize"
+    # return "search_more"
+    return "synthesize"
 
 def increment_iter(state: State) -> Dict:
-    return {"iter": state["iter"] + 1}
+    return {"iter": state.iter + 1}
 
 def synthesize(state: State) -> Dict:
-    # Build paper details directly from state instead of using tool calls
+    import sys
+    user_msg = get_user_query(state.messages)
+    
+    # First, determine if we need deep content search
+    decision_prompt = f"""
+Analyze the user query and determine if deep content search is needed.
+
+Deep content search (vector_search_papers) is needed when:
+- User asks about specific methods, algorithms, or technical details
+- User wants to know "how" something works or is implemented
+- User asks about experimental results, datasets, or evaluation metrics
+- User requests comparison of specific approaches or techniques
+- Query requires evidence from paper body, not just title/abstract
+
+Deep content search is NOT needed when:
+- User asks broad overview questions (e.g., "What are the main approaches to X?")
+- User wants high-level summary or state-of-the-art
+- Query can be answered from titles and abstracts alone
+- User asks about authors, publication venues, or categories
+
+User query: {user_msg}
+Current papers found: {len(state.papers)}
+
+Return JSON with fields:
+- needs_deep_search: boolean
+- reasoning: short explanation
+- search_query: if needs_deep_search is true, provide a refined query for vector search
+"""
+    
+    clean_messages = filter_tool_messages(state.messages)
+    decision = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":decision_prompt}])
+    
+    import json, re
+    needs_deep_search = False
+    search_query = user_msg
+    try:
+        decision_json = json.loads(re.search(r"\{.*\}", str(decision.content), re.S).group(0))
+        needs_deep_search = decision_json.get("needs_deep_search", False)
+        search_query = decision_json.get("search_query", user_msg)
+        reasoning = decision_json.get("reasoning", "")
+        print(f"Synthesize decision: needs_deep_search={needs_deep_search}, reasoning={reasoning}", file=sys.stderr)
+    except Exception as e:
+        print(f"Failed to parse decision: {e}. Defaulting to no deep search.", file=sys.stderr)
+    
+    # If deep search is needed, call vector_search_papers
+    detailed_segments = []
+    if needs_deep_search and state.papers:
+        print(f"Performing vector search with query: {search_query}", file=sys.stderr)
+        try:
+            # Call vector_search_papers tool directly
+            results = vector_search_papers.invoke({"query": search_query, "limit": 5})
+            if isinstance(results, list) and results:
+                detailed_segments = results
+                print(f"Vector search returned {len(detailed_segments)} results with detailed segments", file=sys.stderr)
+        except Exception as e:
+            print(f"Vector search failed: {e}", file=sys.stderr)
+    
+    # Build paper details from state
     paper_details = []
-    for p in state["papers"][:10]:
+    for p in state.papers[:10]:
         paper_details.append({
             "arxiv_id": p.get("arxiv_id"),
-            "title": p.get("title"),
+            "title": p.get("title"),         
             "abstract": p.get("abstract"),
             "authors": p.get("authors"),
             "categories": p.get("categories"),
         })
     
     # Produce final grounded answer
-    answer_prompt = f"""
+    if detailed_segments:
+        answer_prompt = f"""
+Write a comprehensive, well-structured answer grounded in the provided papers and detailed content segments.
+Cite arXiv IDs inline like [arXiv:XXXX.XXXXX] when referencing specific information.
+Use the detailed segments to provide specific technical details, methods, or findings.
+If evidence is weak, state limitations and suggest follow-ups.
+
+Top relevant papers (overview):
+{paper_details[:5]}
+
+Detailed content segments from papers:
+{[{"arxiv_id": s.get("arxiv_id"), "title": s.get("title"), "segment": s.get("supporting_detail")} for s in detailed_segments]}
+"""
+    else:
+        answer_prompt = f"""
 Write a concise, well-structured answer grounded in the provided papers. Cite arXiv IDs inline like [arXiv:XXXX.XXXXX].
 If evidence is weak, state limitations and suggest follow-ups.
 
 Top relevant papers:
 {paper_details}
 """
-    clean_messages = filter_tool_messages(state["messages"])
+    
     final = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content": answer_prompt}])
-    return {"messages": [final]}
+    return {"messages": [decision, final]}
 
 # Build graph
 graph_builder = StateGraph(State)
-graph_builder.add_node("init", init_state)
 graph_builder.add_node("router", router)
 graph_builder.add_node("generate_queries", generate_queries)
 graph_builder.add_node("call_search_tools", call_search_tools)
@@ -312,16 +378,16 @@ graph_builder.add_node("tools", ToolNode([
     search_papers_by_category,
     search_papers,
     get_paper_details,
+    vector_search_papers,
 ]))
 graph_builder.add_node("merge_and_rerank", merge_and_rerank)
 graph_builder.add_node("increment_iter", increment_iter)
 graph_builder.add_node("synthesize", synthesize)
 
-graph_builder.add_edge(START, "init")
-graph_builder.add_edge("init", "router")
+graph_builder.add_edge(START, "router")
 
 def route_branch(state: State):
-    return "search" if state.get("route") == "search" else "synthesize"
+    return "search" if state.route == "search" else "synthesize"
 
 graph_builder.add_conditional_edges("router", route_branch, {
     "search": "generate_queries",

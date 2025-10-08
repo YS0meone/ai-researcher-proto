@@ -24,6 +24,7 @@ uv sync
 ```
 
 This will create a virtual environment and install all required dependencies including:
+
 - FastAPI
 - LangChain with OpenAI support
 - LangGraph and LangGraph CLI
@@ -52,7 +53,6 @@ uv run langgraph dev
 
 The LangGraph development server will start on `http://localhost:2024` by default.
 
-
 ### 5. Run the data pipeline
 
 First make sure you have copy the `.env.example` file in both the backend and project root and create your own `.env` file. Especially, make sure you have the arxiv dataset downloaded and its path configured in the environment variable.
@@ -63,19 +63,13 @@ Then start the elastic search and grobid container using
 docker-compose up -d
 ```
 
-If it doesn't work, try
-
-```bash
-docker compose up -d
-```
-
 In the backend folder run
 
 ```bash
 uv run python -m app.data_pipeline
 ```
 
-Your elasticsearch index should be created. And the papers should be index and embedded into the data store of elastic search. (Notice, the paper loader for metadata loading is currently single threaded, the total amount of paper that is gonna be fetched from the arxiv dataset is based on: batch_size * worker. It would be migrated to concurrent version in the future.)
+Your elasticsearch index should be created. And the papers should be index and embedded into the data store of elastic search. (Notice, the paper loader for metadata loading is currently single threaded, the total amount of paper that is gonna be fetched from the arxiv dataset is based on: batch_size \* worker. It would be migrated to concurrent version in the future.)
 
 ## Project Structure
 

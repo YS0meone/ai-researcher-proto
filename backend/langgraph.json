@@ -1,6 +1,6 @@
 {
     "$schema": "https://langgra.ph/schema.json",
-    "dependencies": ["."],
+    "dependencies": ["./app"],
     "graphs": {
       "agent": "./app/agent/graph.py:graph"
     },

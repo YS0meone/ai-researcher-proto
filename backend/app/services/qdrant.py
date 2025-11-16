@@ -26,7 +26,7 @@ class QdrantService:
                 collection_name=collection,
                 vectors_config=VectorParams(
                     size=self.config.vector_size,
-                    distance=Distance[self.config.distance],
+                    distance=Distance[self.config.distance.upper()],
                 ),
             )
 

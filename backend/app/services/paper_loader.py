@@ -5,7 +5,6 @@ import re
 from grobid_client.grobid_client import GrobidClient
 from langchain_community.document_loaders.parsers import GrobidParser
 from langchain_community.document_loaders.generic import GenericLoader
-from langchain.schema import Document
 from langchain_community.document_loaders.base import BaseBlobParser
 from app.db.models import Paper
 from app.core.config import settings
@@ -23,7 +22,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from app.db.schema import ArxivPaper
 
-def filter_json_stream(file_path, filter_values):
+def filter_json_stream(file_path: str, filter_values: List[str]):
     with open(file_path, 'r', encoding='utf-8') as file:
         for line_num, line in enumerate(file, 1):
             line = line.strip()
@@ -146,7 +145,6 @@ class PaperLoader:
                     categories=paper_data.get('categories', ''),
                     license=paper_data.get('license')
                 )
-                
                 
                 papers_batch.append(paper)
                 processed += 1

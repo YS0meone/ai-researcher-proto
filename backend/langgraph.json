@@ -4,6 +4,9 @@
     "graphs": {
       "agent": "./app/agent/graph.py:graph"
     },
+    "ui": {
+      "agent": "./app/agent/ui.tsx"
+    },
     "env": ".env",
     "image_distro": "wolfi"
   }

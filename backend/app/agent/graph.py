@@ -1,10 +1,12 @@
-from typing import Annotated, List, Dict, Any, Optional, Literal
+from typing import Annotated, List, Dict, Any, Optional, Literal, Sequence
 from langchain.chat_models import init_chat_model
-from langchain.messages import SystemMessage
+from langchain.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from app.core.config import settings
+import uuid
 from app.tools.search import (
     hybrid_search_papers,
     semantic_search_papers,
@@ -14,13 +16,61 @@ from app.tools.search import (
     get_paper_details,
     vector_search_papers,
 )
+from app.agent.prompts import (
+    RouterPrompts,
+    RerankingPrompts,
+    SynthesisPrompts,
+    SearchAgentPrompts,
+)
 from pydantic import BaseModel, Field
 import logging
-import pprint
 
 logger = logging.getLogger(__name__)
 
 model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+
+# ============================================================================
+# STRUCTURED OUTPUT MODELS
+# ============================================================================
+
+class RouterDecision(BaseModel):
+    """Structured output for routing decisions."""
+    route: Literal["search", "synthesize"]
+    short_reason: str
+
+class QueryGeneration(BaseModel):
+    """Structured output for query generation."""
+    queries: List[str] = Field(max_length=4)
+
+class RerankingResult(BaseModel):
+    """Structured output for paper reranking."""
+    order: List[str]
+    coverage_score: float = Field(ge=0.0, le=1.0)
+    brief_reasoning: Optional[str] = None
+
+class SynthesisDecision(BaseModel):
+    """Structured output for synthesis planning."""
+    needs_deep_search: bool
+    reasoning: str
+    search_query: Optional[str] = None
+
+class SearchToolCall(BaseModel):
+    """Structured output for a single search tool call."""
+    tool_name: Literal["hybrid_search_papers", "semantic_search_papers", 
+                       "keyword_search_papers", "vector_search_papers",
+                       "search_papers_by_category"]
+    query: str
+    limit: int = 15
+    reasoning: str  # Why this tool for this query
+
+class SearchPlan(BaseModel):
+    """Structured output for search planning."""
+    tool_calls: List[SearchToolCall] = Field(min_items=1, max_items=5)
+    strategy: str  # Overall search strategy explanation
+
+# ============================================================================
+# GRAPH STATE
+# ============================================================================
 
 class State(BaseModel):
     messages: Annotated[list, add_messages] = Field(default_factory=list)
@@ -30,43 +80,7 @@ class State(BaseModel):
     max_iters: int = Field(default=3)
     coverage_score: float = Field(default=0.0)
     route: Optional[Literal["search","synthesize"]] = Field(default=None)
-
-BASE_SYS = "You are an AI research assistant. Think step-by-step, minimize cost, and avoid redundant searches."
-
-def filter_tool_messages(messages: list) -> list:
-    """
-    Filter out tool-related messages to avoid OpenAI API constraint violation.
-    OpenAI requires that assistant messages with tool_calls be immediately followed
-    by tool response messages, so we filter these out when making new LLM calls.
-    """
-    clean_messages = []
-    for m in messages:
-        # Skip tool response messages (check both 'type' and 'role' fields)
-        if isinstance(m, dict):
-            if m.get("type") == "tool" or m.get("role") == "tool":
-                continue
-            # Skip assistant messages with tool_calls
-            if m.get("tool_calls"):
-                continue
-        # Skip assistant messages with tool_calls (LangChain message objects)
-        if hasattr(m, "type") and m.type == "tool":
-            continue
-        if hasattr(m, "tool_calls") and m.tool_calls:
-            continue
-        # Additional check: for ToolMessage class
-        if m.__class__.__name__ == "ToolMessage":
-            continue
-        clean_messages.append(m)
-    
-    # Debug: print message types being kept
-    import sys
-    for i, msg in enumerate(clean_messages):
-        msg_type = getattr(msg, 'type', None) or (msg.get('type') if isinstance(msg, dict) else None)
-        msg_role = getattr(msg, 'role', None) or (msg.get('role') if isinstance(msg, dict) else None)
-        has_tool_calls = bool(getattr(msg, 'tool_calls', None) or (msg.get('tool_calls') if isinstance(msg, dict) else None))
-        # print(f"DEBUG: Message {i}: type={msg_type}, role={msg_role}, has_tool_calls={has_tool_calls}, class={msg.__class__.__name__}", file=sys.stderr)
-    
-    return clean_messages
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer] = Field(default_factory=list)
 
 def get_user_query(messages: list) -> str:
     """Extract the original user query from the message history."""
@@ -81,116 +95,100 @@ def get_user_query(messages: list) -> str:
 
 def router(state: State) -> Dict:
     user_msg = get_user_query(state.messages)
-    prompt = f"""
-Decide whether to SEARCH or SYNTHESIZE now.
-Consider: if the user asks for facts grounded in papers or unknown coverage, choose SEARCH.
-Return JSON with fields: route ("search"|"synthesize"), short_reason.
-User: {user_msg}
-"""
-    clean_messages = filter_tool_messages(state.messages)
-    out = model.invoke([*clean_messages, {"role":"user","content":prompt}])
-    route = "search" if "search" in str(out.content).lower() else "synthesize"
-    return {"route": route, "messages": [out]}
+    prompt = RouterPrompts.format_decision(
+        user_msg=user_msg,
+        num_papers=len(state.papers),
+        coverage_score=state.coverage_score,
+        search_queries=state.search_queries
+    )
+    
+    structured_model = model.with_structured_output(RouterDecision)
+    result = structured_model.invoke([
+        SystemMessage(content=RouterPrompts.SYSTEM),
+        *state.messages,
+        HumanMessage(content=prompt)
+    ])
+    
+    return {"route": result.route, "messages": [HumanMessage(content=f"Routing decision: {result.route}. Reason: {result.short_reason}")]}
 
-def generate_queries(state: State) -> Dict:
+def search_agent(state: State) -> Dict:
+    """
+    Unified search agent that generates queries and selects tools.
+    Returns ONE AIMessage with MULTIPLE tool_calls to avoid LangGraph tool response mismatch.
+    """
     user_msg = get_user_query(state.messages)
-    prompt = f"""
-Generate 2-4 diversified search queries for tools (hybrid/semantic/keyword/category) for the user intent.
-Return as JSON list 'queries'. Avoid duplicates.
-User: {user_msg}
-Current queries: {state.search_queries}
-"""
-    clean_messages = filter_tool_messages(state.messages)
-    out = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":prompt}])
-    # naive parse; improve with structured output parser if desired
-    import json, re
-    text = str(out.content)
-    try:
-        queries = json.loads(re.search(r"\[.*\]", text, re.S).group(0))
-    except Exception:
-        queries = []
-        for line in text.splitlines():
-            if line.strip() and len(queries) < 4:
-                queries.append(line.strip("- ").strip())
-    # merge & dedupe
-    seen = set(q.lower() for q in state.search_queries)
-    merged = state.search_queries + [q for q in queries if q and q.lower() not in seen]
-    return {"search_queries": merged[:6], "messages": [out]}
-
- 
-
-def call_search_tools(state: State) -> Dict:
-    # Let the model pick tools per query sequentially
-    # In each round, we nudge it to choose the best tool and produce a single tool call
-    queries = state.search_queries[-2:] or state.search_queries
+    
+    # Get search plan with structured output
+    prompt = SearchAgentPrompts.format_planning(
+        user_msg=user_msg,
+        search_queries=state.search_queries
+    )
+    
+    structured_model = model.with_structured_output(SearchPlan)
+    plan = structured_model.invoke([
+        SystemMessage(content=SearchAgentPrompts.SYSTEM),
+        *state.messages,
+        HumanMessage(content=prompt)
+    ])
+    
+    # Build tool instructions from the plan
+    tool_instructions = f"Execute the following search strategy: {plan.strategy}\n\nSearches to perform:\n"
+    for tc in plan.tool_calls:
+        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
+    
+    # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
     tool_bound = model.bind_tools([
         hybrid_search_papers,
         semantic_search_papers,
         keyword_search_papers,
         search_papers_by_category,
-        search_papers,
         vector_search_papers,
     ])
-    all_results: List[Dict[str, Any]] = []
-    tool_msgs = []
-    clean_messages = filter_tool_messages(state.messages)
-    for q in queries:
-        choose = f"""
-Choose ONE best tool for this query and call it. Query: "{q}"
-Tool guidance: 
-- hybrid (default for broad searches)
-- semantic (conceptual similarity in title/abstract)
-- vector_search (deep content search when specific details/methods/findings needed)
-- keyword (exact names/phrases)
-- category (browse by domain)
-Return only the tool call.
-"""
-        m = tool_bound.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":choose}])
-        tool_msgs.append(m)
-        if not m.tool_calls:
-            continue
-        # Let ToolNode execute; emulate minimal execution here by returning the tool-calls
-        # LangGraph will route to ToolNode next
-    return {"messages": tool_msgs}
+    
+    # Invoke with explicit tool call instructions
+    ai_message = tool_bound.invoke([
+        SystemMessage(content="You are a search execution agent. Execute the planned searches by calling the appropriate tools."),
+        HumanMessage(content=tool_instructions)
+    ])
+    
+    # Extract queries for state tracking
+    queries = [tc.query for tc in plan.tool_calls]
+    seen = set(q.lower() for q in state.search_queries)
+    merged = state.search_queries + [q for q in queries if q and q.lower() not in seen]
+    
+    return {
+        "search_queries": merged[:6],
+        "messages": [ai_message]  # Single AIMessage with multiple tool_calls!
+    }
 
 def merge_and_rerank(state: State) -> Dict:
     # Collect the last tool outputs from messages
     import sys
+    import json
     candidates: List[Dict[str, Any]] = []
-    
-    # print(f"\n=== MERGE_AND_RERANK DEBUG ===", file=sys.stderr)
-    # print(f"Total messages in state: {len(state['messages'])}", file=sys.stderr)
     
     for idx, m in enumerate(state.messages):
         msg_type = getattr(m, 'type', None) or (m.get('type') if isinstance(m, dict) else None)
         msg_class = m.__class__.__name__
-        # print(f"Message {idx}: type={msg_type}, class={msg_class}", file=sys.stderr)
         
         # Check if this is a tool message
         is_tool = (isinstance(m, dict) and m.get("type") == "tool") or (hasattr(m, "type") and m.type == "tool") or msg_class == "ToolMessage"
         if is_tool:
             content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-            # print(f"  -> TOOL MESSAGE found! Content type: {type(content)}", file=sys.stderr)
-            # print(f"  -> Content preview: {str(content)[:200]}", file=sys.stderr)
             
             # Try to extract results
             if isinstance(content, list):
-                # print(f"  -> Content is a list with {len(content)} items", file=sys.stderr)
                 for item in content:
                     if isinstance(item, dict) and item.get("arxiv_id"):
                         candidates.append(item)
-                        # print(f"  -> Added paper: {item.get('arxiv_id')}", file=sys.stderr)
             elif isinstance(content, str):
                 # Tool content might be JSON string
                 try:
-                    import json
                     parsed = json.loads(content)
                     if isinstance(parsed, list):
-                        # print(f"  -> Parsed JSON list with {len(parsed)} items", file=sys.stderr)
                         for item in parsed:
                             if isinstance(item, dict) and item.get("arxiv_id"):
                                 candidates.append(item)
-                                # print(f"  -> Added paper: {item.get('arxiv_id')}", file=sys.stderr)
                 except:
                     pass
     
@@ -226,47 +224,38 @@ def merge_and_rerank(state: State) -> Dict:
         print("WARNING: No papers to rerank! Returning empty results.", file=sys.stderr)
         return {"papers": [], "coverage_score": 0.0}
     
-    prompt = f"""
-Rerank these candidate papers for answering the user query.
-Return JSON with fields:
-- order: list of arxiv_id sorted by descending relevance
-- coverage_score: float between 0 and 1 indicating how sufficient the top-10 are to answer.
-
-User: {user_msg}
-Candidates (id, title, abstract<=400):
-{[{ 'id': p.get('arxiv_id'), 'title': p.get('title'), 'abstract': (p.get('abstract','') or '')[:400] } for p in short_list]}
-"""
-    clean_messages = filter_tool_messages(state.messages)
-    out = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":prompt}])
+    prompt = RerankingPrompts.format_reranking(
+        user_msg=user_msg,
+        candidates=short_list
+    )
     
-    # print(f"LLM response: {str(out.content)[:500]}", file=sys.stderr)
+    structured_model = model.with_structured_output(RerankingResult)
+    result = structured_model.invoke([
+        SystemMessage(content=RerankingPrompts.SYSTEM),
+        *state.messages,
+        HumanMessage(content=prompt)
+    ])
     
-    import json, re
-    order: List[str] = []
-    coverage = 0.0
-    try:
-        j = json.loads(re.search(r"\{.*\}", str(out.content), re.S).group(0))
-        order = j.get("order", []) or []
-        coverage = float(j.get("coverage_score", 0))
-        # print(f"Parsed order: {len(order)} papers, coverage: {coverage}", file=sys.stderr)
-    except Exception as e:
-        print(f"Failed to parse LLM response: {e}", file=sys.stderr)
+    order = result.order
+    coverage = result.coverage_score
+    
+    # Fallback if no valid order returned
+    if not order:
+        print("WARNING: No valid order returned, using default", file=sys.stderr)
         order = [p.get("arxiv_id") for p in short_list]
-        print(f"Using default order with {len(order)} papers", file=sys.stderr)
 
     id_to_p = {p["arxiv_id"]: p for p in merged}
     reranked = [id_to_p[i] for i in order if i in id_to_p] + [p for p in merged if p["arxiv_id"] not in set(order)]
     
     print(f"Final reranked papers: {len(reranked[:50])}", file=sys.stderr)
-    print(f"=== END MERGE_AND_RERANK DEBUG ===\n", file=sys.stderr)
     
-    return {"papers": reranked[:50], "coverage_score": coverage, "messages": [out]}
+    return {"papers": reranked[:50], "coverage_score": coverage, "messages": [HumanMessage(content=f"Reranked {len(reranked[:50])} papers, coverage: {coverage:.2f}")]}
 
 def decide_next(state: State):
-    # if state["coverage_score"] >= 0.65 or state["iter"] + 1 >= state["max_iters"]:
-    #     return "synthesize"
-    # return "search_more"
-    return "synthesize"
+    """Decide whether to continue searching or synthesize results."""
+    if state.coverage_score >= 0.65 or state.iter + 1 >= state.max_iters:
+        return "synthesize"
+    return "search_more"
 
 def increment_iter(state: State) -> Dict:
     return {"iter": state.iter + 1}
@@ -276,45 +265,21 @@ def synthesize(state: State) -> Dict:
     user_msg = get_user_query(state.messages)
     
     # First, determine if we need deep content search
-    decision_prompt = f"""
-Analyze the user query and determine if deep content search is needed.
-
-Deep content search (vector_search_papers) is needed when:
-- User asks about specific methods, algorithms, or technical details
-- User wants to know "how" something works or is implemented
-- User asks about experimental results, datasets, or evaluation metrics
-- User requests comparison of specific approaches or techniques
-- Query requires evidence from paper body, not just title/abstract
-
-Deep content search is NOT needed when:
-- User asks broad overview questions (e.g., "What are the main approaches to X?")
-- User wants high-level summary or state-of-the-art
-- Query can be answered from titles and abstracts alone
-- User asks about authors, publication venues, or categories
-
-User query: {user_msg}
-Current papers found: {len(state.papers)}
-
-Return JSON with fields:
-- needs_deep_search: boolean
-- reasoning: short explanation
-- search_query: if needs_deep_search is true, provide a refined query for vector search
-"""
+    decision_prompt = SynthesisPrompts.format_decision(
+        user_msg=user_msg,
+        num_papers=len(state.papers)
+    )
     
-    clean_messages = filter_tool_messages(state.messages)
-    decision = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content":decision_prompt}])
+    structured_model = model.with_structured_output(SynthesisDecision)
+    decision = structured_model.invoke([
+        SystemMessage(content=SynthesisPrompts.DECISION_SYSTEM),
+        *state.messages,
+        HumanMessage(content=decision_prompt)
+    ])
     
-    import json, re
-    needs_deep_search = False
-    search_query = user_msg
-    try:
-        decision_json = json.loads(re.search(r"\{.*\}", str(decision.content), re.S).group(0))
-        needs_deep_search = decision_json.get("needs_deep_search", False)
-        search_query = decision_json.get("search_query", user_msg)
-        reasoning = decision_json.get("reasoning", "")
-        print(f"Synthesize decision: needs_deep_search={needs_deep_search}, reasoning={reasoning}", file=sys.stderr)
-    except Exception as e:
-        print(f"Failed to parse decision: {e}. Defaulting to no deep search.", file=sys.stderr)
+    needs_deep_search = decision.needs_deep_search
+    search_query = decision.search_query or user_msg
+    print(f"Synthesize decision: needs_deep_search={needs_deep_search}, reasoning={decision.reasoning}", file=sys.stderr)
     
     # If deep search is needed, call vector_search_papers
     detailed_segments = []
@@ -342,35 +307,28 @@ Return JSON with fields:
     
     # Produce final grounded answer
     if detailed_segments:
-        answer_prompt = f"""
-Write a comprehensive, well-structured answer grounded in the provided papers and detailed content segments.
-Cite arXiv IDs inline like [arXiv:XXXX.XXXXX] when referencing specific information.
-Use the detailed segments to provide specific technical details, methods, or findings.
-If evidence is weak, state limitations and suggest follow-ups.
-
-Top relevant papers (overview):
-{paper_details[:5]}
-
-Detailed content segments from papers:
-{[{"arxiv_id": s.get("arxiv_id"), "title": s.get("title"), "segment": s.get("supporting_detail")} for s in detailed_segments]}
-"""
+        answer_prompt = SynthesisPrompts.format_answer_with_details(
+            user_msg=user_msg,
+            paper_details=paper_details[:5],
+            detailed_segments=detailed_segments
+        )
     else:
-        answer_prompt = f"""
-Write a concise, well-structured answer grounded in the provided papers. Cite arXiv IDs inline like [arXiv:XXXX.XXXXX].
-If evidence is weak, state limitations and suggest follow-ups.
-
-Top relevant papers:
-{paper_details}
-"""
+        answer_prompt = SynthesisPrompts.format_answer_basic(
+            user_msg=user_msg,
+            paper_details=paper_details
+        )
     
-    final = model.invoke([SystemMessage(content=BASE_SYS), *clean_messages, {"role":"user","content": answer_prompt}])
-    return {"messages": [decision, final]}
+    final = model.invoke([
+        SystemMessage(content=SynthesisPrompts.ANSWER_SYSTEM),
+        *state.messages,
+        HumanMessage(content=answer_prompt)
+    ])
+    return {"messages": [final]}
 
 # Build graph
 graph_builder = StateGraph(State)
 graph_builder.add_node("router", router)
-graph_builder.add_node("generate_queries", generate_queries)
-graph_builder.add_node("call_search_tools", call_search_tools)
+graph_builder.add_node("search_agent", search_agent)
 graph_builder.add_node("tools", ToolNode([
     hybrid_search_papers,
     semantic_search_papers,
@@ -390,20 +348,19 @@ def route_branch(state: State):
     return "search" if state.route == "search" else "synthesize"
 
 graph_builder.add_conditional_edges("router", route_branch, {
-    "search": "generate_queries",
+    "search": "search_agent",
     "synthesize": "synthesize",
 })
 
 # Search loop
-graph_builder.add_edge("generate_queries", "call_search_tools")
-graph_builder.add_edge("call_search_tools", "tools")
+graph_builder.add_edge("search_agent", "tools")
 graph_builder.add_edge("tools", "merge_and_rerank")
 
 graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
     "search_more": "increment_iter",
     "synthesize": "synthesize",
 })
-graph_builder.add_edge("increment_iter", "generate_queries")
+graph_builder.add_edge("increment_iter", "search_agent")
 
 graph_builder.add_edge("synthesize", END)
 graph = graph_builder.compile()

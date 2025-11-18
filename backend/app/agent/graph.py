@@ -3,10 +3,8 @@ from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from app.core.config import settings
-import uuid
 from app.tools.search import (
     hybrid_search_papers,
     semantic_search_papers,
@@ -80,7 +78,6 @@ class State(BaseModel):
     max_iters: int = Field(default=3)
     coverage_score: float = Field(default=0.0)
     route: Optional[Literal["search","synthesize"]] = Field(default=None)
-    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer] = Field(default_factory=list)
 
 def get_user_query(messages: list) -> str:
     """Extract the original user query from the message history."""

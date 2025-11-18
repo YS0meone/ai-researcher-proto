@@ -32,9 +32,20 @@ def main():
     print()
     
     # Process enough lines to get a good dataset
+    limit = 10000  # Process 500k lines to get ~100k-150k CS papers
+    
+    # PDF Processing: Controlled by LOADER_PROCESS_PDFS env variable
+    # False (default) = Fast bulk loading (metadata + title/abstract embeddings only)
+    # True = Full-text search (downloads PDFs and parses with GROBID - 20x slower!)
+    process_pdfs = settings.paper_loader_config.process_pdfs
+    
+    print(f"⚡ Speed mode: {'SLOW - Full PDFs' if process_pdfs else 'FAST - Metadata only'}")
+    print()
+    
     result = loader.load_by_metadata_parallel(
         categories_filter=cs_categories,
-        limit=100000  # Process 500k lines to get ~100k-150k CS papers
+        limit=limit,
+        process_pdfs=process_pdfs
     )
     
     print(f"\n{'='*60}")
@@ -46,8 +57,7 @@ def main():
     print(f"⚡ Rate: {result['rate']:.2f} papers/sec")
     
     # Calculate match rate
-    limit = 500000
-    if result['total_processed'] > 0:
+    if result['total_processed'] > 0 and limit > 0:
         match_rate = result['total_processed'] / limit * 100
         print(f"📊 Match rate: {match_rate:.1f}% of lines contained CS papers")
     

@@ -31,13 +31,16 @@ from tqdm import tqdm
 _worker_embedding_model = None
 _worker_es_client = None
 _worker_qdrant_client = None
+_worker_vector_store = None
 
 def init_metadata_worker():
     """Initialize worker process with embedding model and clients."""
-    global _worker_embedding_model, _worker_es_client, _worker_qdrant_client
+    global _worker_embedding_model, _worker_es_client, _worker_qdrant_client, _worker_vector_store
     from sentence_transformers import SentenceTransformer
     from elasticsearch import Elasticsearch
     from qdrant_client import QdrantClient
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_qdrant import QdrantVectorStore
     
     print(f"Initializing worker process {multiprocessing.current_process().name}...")
     
@@ -54,8 +57,24 @@ def init_metadata_worker():
         ssl_show_warn=False,
     )
     
-    # Initialize Qdrant client
-    _worker_qdrant_client = QdrantClient(url=settings.qdrant_config.url)
+    # Initialize Qdrant client with optimized settings
+    _worker_qdrant_client = QdrantClient(
+        url=settings.qdrant_config.url,
+        timeout=300,  # 5 minute timeout for large batches
+        prefer_grpc=False  # Use HTTP for better compatibility
+    )
+    
+    # Initialize Qdrant vector store once per worker (reuses embedding model)
+    embeddings = HuggingFaceEmbeddings(
+        model_name='allenai-specter',
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True}
+    )
+    _worker_vector_store = QdrantVectorStore(
+        client=_worker_qdrant_client,
+        collection_name=settings.qdrant_config.collection,
+        embedding=embeddings
+    )
     
     print(f"Worker {multiprocessing.current_process().name} initialized successfully")
 
@@ -85,7 +104,8 @@ def _check_papers_exist(worker_id: int, papers: List[ArxivPaper]) -> List[ArxivP
     
     return new_papers
 
-def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing: bool = True) -> int:
+def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing: bool = True, 
+                        process_pdfs: bool = False) -> int:
     """
     Index a batch of papers to both Elasticsearch and Qdrant.
     Uses global worker resources.
@@ -94,6 +114,7 @@ def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing:
         worker_id: Worker identifier
         papers: List of papers to index
         skip_existing: If True, skip papers that already exist in Elasticsearch
+        process_pdfs: If True, download PDFs and parse with GROBID (slow). If False, only index metadata.
     
     Returns:
         Number of successfully indexed papers
@@ -142,31 +163,61 @@ def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing:
         
         print(f"Worker {worker_id}: Indexed {es_success} papers to Elasticsearch")
         
-        # 2. Download PDFs and parse with GROBID
+        # 2. Download PDFs and parse with GROBID (optional, only if process_pdfs=True)
+        if not process_pdfs:
+            print(f"Worker {worker_id}: Skipping PDF processing (process_pdfs=False)")
+            return es_success
+        
         temp_dir = tempfile.mkdtemp(prefix=f'worker_{worker_id}_')
         try:
-            # Download PDFs
-            arxiv_client = arxiv.Client()
-            for paper in papers:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import time
+            
+            def download_single_pdf(paper_id, temp_dir_path):
+                """Download a single PDF from ArXiv."""
                 try:
-                    pdf_path = Path(temp_dir) / f"{paper.id}.pdf"
-                    # Search for paper by ID and download
-                    search = arxiv.Search(id_list=[paper.id])
+                    arxiv_client = arxiv.Client()
+                    search = arxiv.Search(id_list=[paper_id])
                     results = list(arxiv_client.results(search))
                     if results:
                         result = results[0]
-                        result.download_pdf(dirpath=temp_dir, filename=f"{paper.id}.pdf")
+                        result.download_pdf(dirpath=temp_dir_path, filename=f"{paper_id}.pdf")
+                        return paper_id, True, None
                 except Exception as e:
-                    print(f"Worker {worker_id}: Failed to download {paper.id}: {e}")
+                    return paper_id, False, str(e)
             
-            # Parse with GROBID
+            # Download PDFs in parallel (up to 5 concurrent downloads per worker)
+            download_start = time.time()
+            downloaded_papers = set()
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(download_single_pdf, paper.id, temp_dir): paper for paper in papers}
+                for future in as_completed(futures):
+                    paper_id, success, error = future.result()
+                    if success:
+                        downloaded_papers.add(paper_id)
+                    else:
+                        print(f"Worker {worker_id}: Failed to download {paper_id}: {error}")
+            
+            download_time = time.time() - download_start
+            print(f"Worker {worker_id}: Downloaded {len(downloaded_papers)}/{len(papers)} PDFs in {download_time:.1f}s ({len(downloaded_papers)/download_time:.1f} PDFs/sec)")
+            
+            # Parse with GROBID (processes all PDFs in the temp directory)
+            if not downloaded_papers:
+                print(f"Worker {worker_id}: No PDFs downloaded successfully, skipping GROBID parsing")
+                return es_success
+                
             loader = GenericLoader.from_filesystem(
                 temp_dir,
                 glob="*.pdf",
                 suffixes=[".pdf"],
                 parser=GrobidParser(segment_sentences=False)
             )
+            
+            grobid_start = time.time()
+            print(f"Worker {worker_id}: Starting GROBID parsing for {len(downloaded_papers)} PDFs...")
             docs = loader.load()
+            grobid_time = time.time() - grobid_start
+            print(f"Worker {worker_id}: GROBID parsed {len(docs)} document chunks in {grobid_time:.1f}s ({len(docs)/grobid_time:.1f} chunks/sec)")
             
             # Match docs to papers and update metadata
             if docs:
@@ -179,20 +230,21 @@ def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing:
                     if matching_paper:
                         doc.metadata.update(matching_paper.model_dump())
                 
-                # Index to Qdrant using worker embedding
-                # Reuse the already-loaded embedding model via HuggingFaceEmbeddings wrapper
-                embeddings = HuggingFaceEmbeddings(
-                    model_name='allenai-specter',
-                    model_kwargs={'device': 'cpu'},
-                    encode_kwargs={'normalize_embeddings': True}
-                )
-                vector_store = QdrantVectorStore(
-                    client=_worker_qdrant_client,
-                    collection_name=settings.qdrant_config.collection,
-                    embedding=embeddings
-                )
-                vector_store.add_documents(docs)
-                print(f"Worker {worker_id}: Indexed {len(docs)} documents to Qdrant")
+                # Index to Qdrant using pre-initialized worker vector store
+                # This reuses the embedding model loaded during worker initialization
+                import time
+                start_time = time.time()
+                
+                # Split into smaller chunks for better progress feedback
+                chunk_size = 50
+                total_indexed = 0
+                for i in range(0, len(docs), chunk_size):
+                    chunk = docs[i:i+chunk_size]
+                    _worker_vector_store.add_documents(chunk)
+                    total_indexed += len(chunk)
+                    
+                elapsed = time.time() - start_time
+                print(f"Worker {worker_id}: Indexed {total_indexed} documents to Qdrant in {elapsed:.1f}s ({total_indexed/elapsed:.1f} docs/sec)")
             else:
                 print(f"Worker {worker_id}: No documents parsed from PDFs")
         
@@ -210,7 +262,8 @@ def _index_papers_batch(worker_id: int, papers: List[ArxivPaper], skip_existing:
 
 def process_metadata_chunk(worker_id: int, start_line: int, end_line: int, 
                           json_path: str, categories_filter: List[str],
-                          batch_size: int = 50, skip_existing: bool = True):
+                          batch_size: int = 50, skip_existing: bool = True, 
+                          progress_dict=None, process_pdfs: bool = False):
     """
     Worker function to process a chunk of the metadata JSON file.
     
@@ -221,31 +274,32 @@ def process_metadata_chunk(worker_id: int, start_line: int, end_line: int,
         json_path: Path to ArXiv metadata JSON
         categories_filter: List of category filters
         batch_size: Batch size for indexing
+        skip_existing: If True, skip papers that already exist
+        progress_dict: Shared dict for progress tracking (optional)
+        process_pdfs: If True, download and parse PDFs (slow). If False, only metadata.
     """
+    from itertools import islice
+    
     papers_batch = []
     processed = 0
     errors = 0
+    lines_read = 0
     
     total_lines = end_line - start_line
     
     with open(json_path, 'r', encoding='utf-8') as f:
-        # Skip to start line
-        for _ in range(start_line):
-            f.readline()
-        
-        # Create progress bar for this worker
-        pbar = tqdm(
-            total=total_lines,
-            desc=f"Worker {worker_id}",
-            position=worker_id,
-            leave=True,
-            unit="lines"
-        )
+        # Efficiently skip to start line using islice
+        for _ in islice(f, start_line):
+            pass
         
         # Process lines in range
         for line_num in range(start_line, end_line):
             line = f.readline()
-            pbar.update(1)
+            lines_read += 1
+            
+            # Update shared progress every 100 lines
+            if progress_dict is not None and lines_read % 100 == 0:
+                progress_dict['lines'] = progress_dict.get('lines', 0) + 100
             
             if not line:
                 break
@@ -278,31 +332,40 @@ def process_metadata_chunk(worker_id: int, start_line: int, end_line: int,
                 )
                 
                 papers_batch.append(paper)
-                pbar.set_postfix({"papers": processed, "errors": errors})
                 
                 # Process batch when size reached
                 if len(papers_batch) >= batch_size:
-                    success = _index_papers_batch(worker_id, papers_batch, skip_existing)
+                    success = _index_papers_batch(worker_id, papers_batch, skip_existing, process_pdfs)
                     processed += success
                     errors += (len(papers_batch) - success)
                     papers_batch = []
-                    pbar.set_postfix({"papers": processed, "errors": errors})
+                    
+                    # Update shared progress
+                    if progress_dict is not None:
+                        progress_dict['papers'] = progress_dict.get('papers', 0) + success
+                        progress_dict['errors'] = progress_dict.get('errors', 0) + errors
                     
             except json.JSONDecodeError as e:
-                pbar.write(f"Worker {worker_id}: JSON error on line {line_num}: {e}")
                 errors += 1
             except Exception as e:
-                pbar.write(f"Worker {worker_id}: Error on line {line_num}: {e}")
                 errors += 1
         
         # Process remaining papers
         if papers_batch:
-            success = _index_papers_batch(worker_id, papers_batch, skip_existing)
+            success = _index_papers_batch(worker_id, papers_batch, skip_existing, process_pdfs)
             processed += success
             errors += (len(papers_batch) - success)
-            pbar.set_postfix({"papers": processed, "errors": errors})
+            
+            # Final progress update
+            if progress_dict is not None:
+                progress_dict['papers'] = progress_dict.get('papers', 0) + success
+                progress_dict['errors'] = progress_dict.get('errors', 0) + errors
         
-        pbar.close()
+        # Update final line count
+        if progress_dict is not None:
+            remaining_lines = lines_read % 100
+            if remaining_lines > 0:
+                progress_dict['lines'] = progress_dict.get('lines', 0) + remaining_lines
     
     print(f"Worker {worker_id} completed: {processed} indexed, {errors} errors")
     return {'processed': processed, 'errors': errors}
@@ -459,7 +522,8 @@ class PaperLoader:
         print(f"Total papers processed: {processed}")
     
     def load_by_metadata_parallel(self, categories_filter: List[str] = None, 
-                                  limit: int = None, skip_existing: bool = True) -> Dict[str, Any]:
+                                  limit: int = None, skip_existing: bool = True,
+                                  process_pdfs: bool = False) -> Dict[str, Any]:
         """
         Parallel version of load_by_metadata using multiprocessing.
         
@@ -467,14 +531,18 @@ class PaperLoader:
             categories_filter: List of categories to filter
             limit: Optional limit on total papers (approximate)
             skip_existing: If True, skip papers that already exist in Elasticsearch (default: True)
+            process_pdfs: If True, download and parse PDFs with GROBID (SLOW - 20x slower!).
+                         If False (default), only index metadata with title/abstract embeddings (FAST).
             
         Returns:
             Dict with statistics: total_processed, total_errors, duration
         """
-        from multiprocessing import Pool
+        from multiprocessing import Pool, Manager
+        import threading
         
         json_path = self.config.arxiv_metadata_path
         workers = self.config.workers
+        batch_size = self.config.batch_size
         
         print(f"📊 Counting total lines in {json_path}...")
         # Count total lines for chunking with progress bar
@@ -487,26 +555,73 @@ class PaperLoader:
         
         lines_per_worker = total_lines // workers
         
-        # Build work chunks
+        # Create shared progress tracking using Manager
+        manager = Manager()
+        progress_dict = manager.dict()
+        progress_dict['lines'] = 0
+        progress_dict['papers'] = 0
+        progress_dict['errors'] = 0
+        
+        # Build work chunks with progress_dict
         work_chunks = []
         for i in range(workers):
             start_line = i * lines_per_worker
             end_line = start_line + lines_per_worker if i < workers - 1 else total_lines
             work_chunks.append((i, start_line, end_line, json_path, 
-                              categories_filter or [], 50, skip_existing))
+                              categories_filter or [], batch_size, skip_existing, progress_dict, process_pdfs))
         
         print(f"\n🚀 Starting parallel processing with {workers} workers...")
         print(f"📄 Total lines to process: {total_lines:,}")
         print(f"📦 Lines per worker: ~{lines_per_worker:,}")
+        print(f"📦 Batch size: {batch_size}")
         print(f"🎯 Category filters: {categories_filter or 'None'}")
         print(f"🔄 Skip existing: {'Yes' if skip_existing else 'No'}")
-        print(f"\n{'='*60}")
+        print(f"📑 Process PDFs: {'Yes (SLOW - full text)' if process_pdfs else 'No (FAST - metadata only)'}")
+        print(f"\n{'='*60}\n")
         
         start_time = time.time()
+        
+        # Start progress monitoring in background thread
+        stop_monitor = threading.Event()
+        
+        def monitor_progress():
+            pbar = tqdm(total=total_lines, desc="Overall Progress", unit="lines", position=0)
+            last_lines = 0
+            while not stop_monitor.is_set():
+                current_lines = progress_dict.get('lines', 0)
+                current_papers = progress_dict.get('papers', 0)
+                current_errors = progress_dict.get('errors', 0)
+                
+                # Update progress bar
+                delta = current_lines - last_lines
+                if delta > 0:
+                    pbar.update(delta)
+                    last_lines = current_lines
+                
+                # Update postfix with papers and errors
+                pbar.set_postfix({
+                    'papers': current_papers,
+                    'errors': current_errors,
+                    'rate': f"{current_papers/(time.time()-start_time):.1f}/s" if time.time() > start_time else "0/s"
+                })
+                
+                time.sleep(0.5)  # Update twice per second
+            
+            # Final update
+            pbar.n = total_lines
+            pbar.refresh()
+            pbar.close()
+        
+        monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+        monitor_thread.start()
         
         # Execute parallel processing
         with Pool(processes=workers, initializer=init_metadata_worker) as pool:
             results = pool.starmap(process_metadata_chunk, work_chunks)
+        
+        # Stop progress monitoring
+        stop_monitor.set()
+        monitor_thread.join(timeout=2)
         
         # Aggregate results
         total_processed = sum(r['processed'] for r in results)

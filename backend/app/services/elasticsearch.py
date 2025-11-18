@@ -5,6 +5,39 @@ from sentence_transformers import SentenceTransformer
 from app.core.config import settings, ElasticsearchConfig
 from app.db.schema import ArxivPaper, ArxivPaperBatch
 import time
+import torch
+
+# Global singleton for embedding model to avoid reloading
+_embedding_model_singleton = None
+
+def get_embedding_model():
+    """Get or create the singleton embedding model instance."""
+    global _embedding_model_singleton
+    if _embedding_model_singleton is None:
+        print("Loading embedding model: allenai-specter", flush=True)
+        try:
+            # Explicitly avoid meta device and force eager loading
+            import os
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+            
+            _embedding_model_singleton = SentenceTransformer(
+                'allenai-specter',
+                device='cpu',
+                # Additional args to ensure proper loading
+                cache_folder=None,  # Use default cache
+            )
+            
+            # Force evaluation mode and verify model is loaded
+            _embedding_model_singleton.eval()
+            
+            # Test encode to ensure model is fully initialized
+            test_embedding = _embedding_model_singleton.encode("test", show_progress_bar=False)
+            print(f"Embedding model loaded successfully on cpu (test embedding shape: {test_embedding.shape})", flush=True)
+            
+        except Exception as e:
+            print(f"Error loading embedding model: {e}", flush=True)
+            raise
+    return _embedding_model_singleton
 
 class ElasticsearchService:
     def __init__(self, config: ElasticsearchConfig):
@@ -16,8 +49,8 @@ class ElasticsearchService:
             ssl_show_warn=False,
         )
         self.index = config.index
-        # Use SPECTER for scientific papers (768 dimensions)
-        self.embedding_model = SentenceTransformer('allenai-specter')
+        # Use singleton embedding model
+        self.embedding_model = get_embedding_model()
         self._wait_for_connection()
         is_healthy = self.client.ping()
         print(is_healthy)   

@@ -22,6 +22,7 @@ class PaperLoaderConfig(BaseModel):
     workers: int
     use_postgres: bool
     arxiv_metadata_path: str
+    process_pdfs: bool = False  # Default to False for fast loading
     
 class QdrantConfig(BaseModel):
     url: str
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
     LOADER_WORKERS: int
     LOADER_USE_POSTGRES: bool
     LOADER_ARXIV_METADATA_PATH: str
+    LOADER_PROCESS_PDFS: bool = False
 
     QDRANT_URL: str
     QDRANT_VECTOR_SIZE: int
@@ -98,7 +100,8 @@ class Settings(BaseSettings):
             batch_size=self.LOADER_BATCH_SIZE,
             workers=self.LOADER_WORKERS,
             use_postgres=self.LOADER_USE_POSTGRES,
-            arxiv_metadata_path=self.LOADER_ARXIV_METADATA_PATH
+            arxiv_metadata_path=self.LOADER_ARXIV_METADATA_PATH,
+            process_pdfs=self.LOADER_PROCESS_PDFS
         )
 
     @property

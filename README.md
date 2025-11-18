@@ -1,51 +1,187 @@
 # AI Researcher Proto
 
-An AI-powered research assistant built with LangGraph and React. This application helps users discover and analyze research papers through an intelligent conversational interface.
+An AI-powered research assistant that helps users discover and analyze academic papers through intelligent search and synthesis. Built with LangGraph agents, React, and advanced RAG (Retrieval-Augmented Generation) capabilities.
 
-## Project Structure
+## 🌟 Features
 
-This project is organized into two main components:
+### 🔍 Intelligent Paper Search
+- **Multi-Strategy Search**: Hybrid (text + semantic), pure semantic, keyword, and category-based
+- **768-Dimensional Embeddings**: Using `allenai-specter` model for scientific papers
+- **Vector Database**: Qdrant for semantic search on 100k+ papers
+- **Full-Text Search**: Elasticsearch with metadata and abstract indexing
+- **Parallel Search**: Multiple search strategies executed simultaneously
 
-### 🐍 Backend (`/backend`)
+### 🤖 LangGraph Agent Orchestration
+- **Multi-Node Workflow**: Router → Search Agent → Tools → Reranking → Synthesis
+- **Structured Output**: Pydantic models with chain-of-thought reasoning
+- **Tool Calling**: Proper LangGraph pattern with single AIMessage + multiple tool calls
+- **Iteration Control**: Automatic search refinement based on coverage scores
+- **Citation Generation**: Answers include paper references with metadata
 
-- **LangGraph-powered AI agent** using OpenAI's GPT-4o-mini
-- **Python-based** with FastAPI integration
-- **Handles conversation logic** and research paper analysis
-- **Serves REST API** for the frontend to consume
+### ⚡ High-Performance Data Pipeline
+- **Parallel Processing**: 12 workers with batch processing (100 papers/batch)
+- **Fast Mode**: Metadata + embeddings only (~1 hour for 500k papers)
+- **Slow Mode**: Full PDF parsing with GROBID (~25 hours for 500k papers)
+- **Progress Monitoring**: Real-time stats with tqdm progress bars
+- **Deduplication**: Intelligent skip-existing logic for incremental loads
 
-### ⚛️ Frontend (`/web`)
+### 💬 Modern Chat Interface
+- **React 19** with TypeScript and Vite
+- **Real-time Streaming**: Live message updates from LangGraph
+- **Thread Management**: Conversation history and context
+- **shadcn/ui Components**: Beautiful, accessible UI primitives
+- **Dark/Light Mode**: Tailwind CSS with theme support
 
-- **React chat interface** built with Vite and TypeScript
-- **Real-time messaging** with the AI agent
-- **Modern UI** with Tailwind CSS and shadcn/ui components
-- **Thread management** for conversation history
+## 📋 Prerequisites
 
-## Quick Start
+- **Python 3.12+** with [uv](https://docs.astral.sh/uv/)
+- **Node.js 20+** with pnpm
+- **Docker & Docker Compose** for services
+- **16GB+ RAM** recommended for parallel processing
+- **OpenAI API Key** for GPT-4o-mini inference
 
-1. **Set up the env file for the docker compose**: copy the `.env.example` to create a `.env` in the project root and configure it based on your own need.
-2. **Set up the all services**: run `docker-compose up -d` in project root.
-3. **Set up the backend**: See [`backend/README.md`](./backend/README.md) for Python environment setup
-4. **Set up the frontend**: See [`web/README.md`](./web/README.md) for React app setup
-5. **Start developing**: The frontend automatically connects to the backend when both are running
+## 🚀 Quick Start
 
-If you have setup issues, please check the [Fixing Setup Issues](##fixing-setup-issues) section.
+### 1. Clone Repository
 
-## Features
+```bash
+git clone <your-repo-url>
+cd ai-researcher-proto
+```
 
-- 🤖 Intelligent research paper discovery
-- 💬 Conversational interface
-- 📚 Context-aware responses
-- 🔄 Real-time streaming
-- 📱 Responsive design
-- 🌙 Dark/light mode support
+### 2. Configure Environment
 
-## Development Workflow
+```bash
+# Project root (for Docker services)
+cp .env.example .env
 
-1. Start the backend (Python LangGraph server)
-2. Start the frontend (React development server)
-3. Open your browser and start chatting with the AI researcher!
+# Backend (for Python app)
+cp backend/.env_example backend/.env
+```
 
-For detailed setup instructions, check the README files in each directory.
+Edit `backend/.env` with:
+- Your `OPENAI_API_KEY`
+- Path to ArXiv metadata JSON (`LOADER_ARXIV_METADATA_PATH`)
+- Data pipeline settings (workers, batch size, PDF processing)
+
+### 3. Start Docker Services
+
+```bash
+docker-compose up -d
+```
+
+This starts:
+- **Elasticsearch** (9200) - Full-text search
+- **Qdrant** (6333) - Vector database
+- **Kibana** (5601) - Elasticsearch UI
+- **GROBID** (8070) - PDF parsing service
+
+### 4. Load Paper Data
+
+Download ArXiv metadata from [Kaggle](https://www.kaggle.com/datasets/Cornell-University/arxiv/data), then:
+
+```bash
+cd backend
+uv sync                           # Install Python dependencies
+uv run python -m app.data_pipeline  # Load papers (fast mode ~1 hour)
+```
+
+### 5. Start Backend
+
+```bash
+cd backend
+uv run langgraph dev  # Starts on http://localhost:2024
+```
+
+### 6. Start Frontend
+
+```bash
+cd web
+pnpm install   # Install Node dependencies
+pnpm dev       # Starts on http://localhost:5173
+```
+
+### 7. Start Researching!
+
+1. Open `http://localhost:5173`
+2. Enter connection details:
+   - **Deployment URL**: `http://localhost:2024`
+   - **Assistant ID**: `agent`
+3. Ask questions like:
+   - "What are transformer architectures?"
+   - "Find papers about few-shot learning"
+   - "Recent work on retrieval-augmented generation"
+
+## 📁 Project Structure
+
+```
+ai-researcher-proto/
+├── backend/                    # Python LangGraph backend
+│   ├── app/
+│   │   ├── agent/             # LangGraph agent (graph.py, prompts.py)
+│   │   ├── tools/             # Search tools
+│   │   ├── services/          # Elasticsearch, Qdrant, paper loader
+│   │   └── data_pipeline.py  # Data loading script
+│   ├── .env                   # Backend config (create from .env_example)
+│   └── pyproject.toml        # Python dependencies (uv)
+├── web/                       # React frontend
+│   ├── src/
+│   │   ├── components/       # UI components
+│   │   └── providers/        # React contexts (Stream, Thread)
+│   └── package.json          # Node dependencies (pnpm)
+├── docker-compose.yml         # Services (ES, Qdrant, Kibana, GROBID)
+└── .env                      # Docker config (create from .env_example)
+```
+
+## 🎯 Detailed Setup Guides
+
+- **Backend**: See [`backend/README.md`](./backend/README.md) for:
+  - Data pipeline configuration
+  - Search tool details
+  - Agent architecture
+  - Performance tuning
+  - Troubleshooting
+
+- **Frontend**: See [`web/README.md`](./web/README.md) for:
+  - UI components
+  - Streaming integration
+  - Thread management
+  - Customization
+
+## 🔧 Key Configuration
+
+### Fast vs. Slow Mode
+
+**Fast Mode** (Recommended for development):
+```env
+LOADER_PROCESS_PDFS=false  # Metadata + embeddings only
+LOADER_WORKERS=12
+LOADER_BATCH_SIZE=100
+```
+- ✅ ~1 hour for 500k papers
+- ✅ Title & abstract semantic search
+- ✅ Hybrid search enabled
+
+**Slow Mode** (Full PDF processing):
+```env
+LOADER_PROCESS_PDFS=true   # Download + parse PDFs
+```
+- ⏱️ ~25 hours for 500k papers
+- ✅ Full-text search in paper content
+- ✅ Deep content retrieval
+
+### Performance Tuning
+
+Adjust based on your hardware:
+```env
+LOADER_WORKERS=12          # More workers = faster (but more RAM)
+LOADER_BATCH_SIZE=100      # Larger batches = fewer operations
+```
+
+**Recommended Settings**:
+- **8GB RAM**: 4 workers, batch size 50
+- **16GB RAM**: 8 workers, batch size 100
+- **32GB+ RAM**: 12 workers, batch size 100
 
 ## Fixing Setup Issues
 

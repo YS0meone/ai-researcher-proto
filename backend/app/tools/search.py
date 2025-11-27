@@ -39,29 +39,11 @@ async def search_papers(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         await session.close()
 
 
-@tool
-def hybrid_search_papers(
-    query: str, 
-    limit: int = 10, 
+def hybrid_search_papers_impl(
+    query: str,
+    limit: int = 10,
     categories: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """
-    Search academic papers using hybrid search (combines text search and semantic similarity).
-    
-    This tool provides the most comprehensive search by combining:
-    - Traditional keyword/text matching for exact term matches
-    - Semantic vector similarity for conceptual matches
-    - Category filtering for domain-specific searches
-    
-    Args:
-        query: Search query describing what papers you're looking for
-        limit: Maximum number of results to return (default: 10, max: 50)
-        categories: Optional comma-separated list of ArXiv categories to filter by 
-                   (e.g., "cs.CL,cs.AI" for computational linguistics and AI papers)
-    
-    Returns:
-        List of relevant papers with metadata, scores, and highlighted snippets
-    """
     try:
         # Initialize Elasticsearch service
         es_service = ElasticsearchService(settings.elasticsearch_config)
@@ -100,29 +82,42 @@ def hybrid_search_papers(
         
     except Exception as e:
         return [{"error": f"Search failed: {str(e)}"}]
-
+    
 
 @tool
-def semantic_search_papers(
+def hybrid_search_papers(
     query: str, 
     limit: int = 10, 
+    categories: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search academic papers using hybrid search (combines text search and semantic similarity).
+    
+    This tool provides the most comprehensive search by combining:
+    - Traditional keyword/text matching for exact term matches
+    - Semantic vector similarity for conceptual matches
+    - Category filtering for domain-specific searches
+    
+    Args:
+        query: Search query describing what papers you're looking for
+        limit: Maximum number of results to return (default: 10, max: 50)
+        categories: Optional comma-separated list of ArXiv categories to filter by 
+                   (e.g., "cs.CL,cs.AI" for computational linguistics and AI papers)
+    
+    Returns:
+        List of relevant papers with metadata, scores, and highlighted snippets
+    """
+    return hybrid_search_papers_impl(query, limit, categories)
+
+
+def semantic_search_papers_impl(
+    query: str,
+    limit: int = 10,
     categories: Optional[str] = None,
     search_field: str = "title"
 ) -> List[Dict[str, Any]]:
     """
     Search papers using semantic similarity (finds conceptually similar papers).
-    
-    This tool uses AI embeddings to find papers that are conceptually similar
-    to your query, even if they don't contain the exact keywords.
-    
-    Args:
-        query: Describe the concepts or ideas you're looking for
-        limit: Maximum number of results (default: 10, max: 30)
-        categories: Optional comma-separated ArXiv categories to filter by
-        search_field: Field to search against - "title" or "abstract" (default: "title")
-    
-    Returns:
-        List of conceptually similar papers ranked by semantic similarity
     """
     try:
         es_service = ElasticsearchService(settings.elasticsearch_config)
@@ -163,28 +158,38 @@ def semantic_search_papers(
     except Exception as e:
         return [{"error": f"Semantic search failed: {str(e)}"}]
 
-
-@tool 
-def keyword_search_papers(
+@tool
+def semantic_search_papers(
     query: str, 
     limit: int = 10, 
+    categories: Optional[str] = None,
+    search_field: str = "title"
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using semantic similarity (finds conceptually similar papers).
+    
+    This tool uses AI embeddings to find papers that are conceptually similar
+    to your query, even if they don't contain the exact keywords.
+    
+    Args:
+        query: Describe the concepts or ideas you're looking for
+        limit: Maximum number of results (default: 10, max: 30)
+        categories: Optional comma-separated ArXiv categories to filter by
+        search_field: Field to search against - "title" or "abstract" (default: "title")
+    
+    Returns:
+        List of conceptually similar papers ranked by semantic similarity
+    """
+    
+    return semantic_search_papers_impl(query, limit, categories, search_field)
+
+def keyword_search_papers_impl(
+    query: str,
+    limit: int = 10,
     categories: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Search papers using traditional keyword/text matching.
-    
-    This tool performs exact text matching and is best for:
-    - Finding papers with specific terms or phrases
-    - Author name searches
-    - Exact title or journal searches
-    
-    Args:
-        query: Keywords or phrases to search for
-        limit: Maximum number of results (default: 10, max: 30)
-        categories: Optional comma-separated ArXiv categories to filter by
-    
-    Returns:
-        List of papers matching the keywords with highlighted text snippets
     """
     try:
         es_service = ElasticsearchService(settings.elasticsearch_config)
@@ -222,25 +227,39 @@ def keyword_search_papers(
     except Exception as e:
         return [{"error": f"Keyword search failed: {str(e)}"}]
 
+@tool 
+def keyword_search_papers(
+    query: str, 
+    limit: int = 10, 
+    categories: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using traditional keyword/text matching.
+    
+    This tool performs exact text matching and is best for:
+    - Finding papers with specific terms or phrases
+    - Author name searches
+    - Exact title or journal searches
+    
+    Args:
+        query: Keywords or phrases to search for
+        limit: Maximum number of results (default: 10, max: 30)
+        categories: Optional comma-separated ArXiv categories to filter by
+    
+    Returns:
+        List of papers matching the keywords with highlighted text snippets
+    """
+    
+    return keyword_search_papers_impl(query, limit, categories)
 
-@tool
-def search_papers_by_category(
-    categories: str, 
+
+def search_papers_by_category_impl(
+    categories: str,
     limit: int = 20,
     recent_only: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Browse papers by ArXiv category.
-    
-    Useful for exploring papers in specific research domains.
-    
-    Args:
-        categories: Comma-separated ArXiv categories (e.g., "cs.CL,cs.AI,cs.LG")
-        limit: Maximum number of results (default: 20, max: 50)
-        recent_only: If True, prioritize more recent papers (default: False)
-    
-    Returns:
-        List of papers from the specified categories
     """
     try:
         es_service = ElasticsearchService(settings.elasticsearch_config)
@@ -275,10 +294,28 @@ def search_papers_by_category(
         return [{"error": f"Category search failed: {str(e)}"}]
 
 @tool
-def get_paper_details(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
+def search_papers_by_category(
+    categories: str, 
+    limit: int = 20,
+    recent_only: bool = False
+) -> List[Dict[str, Any]]:
     """
-    Fetch full details for a list of arXiv IDs to ground synthesis.
+    Browse papers by ArXiv category.
+    
+    Useful for exploring papers in specific research domains.
+    
+    Args:
+        categories: Comma-separated ArXiv categories (e.g., "cs.CL,cs.AI,cs.LG")
+        limit: Maximum number of results (default: 20, max: 50)
+        recent_only: If True, prioritize more recent papers (default: False)
+    
+    Returns:
+        List of papers from the specified categories
     """
+    
+    return search_papers_by_category_impl(categories, limit, recent_only)
+
+def get_paper_details_impl(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
     es = ElasticsearchService(settings.elasticsearch_config)
     out: List[Dict[str, Any]] = []
     for pid in arxiv_ids:
@@ -296,27 +333,21 @@ def get_paper_details(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
             })
     return out
 
-
 @tool
-def vector_search_papers(
+def get_paper_details(arxiv_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fetch full details for a list of arXiv IDs to ground synthesis.
+    """
+    return get_paper_details_impl(arxiv_ids)
+
+
+def vector_search_papers_impl(
     query: str,
     limit: int = 10,
     score_threshold: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """
     Search papers using deep semantic vector search with full-text content retrieval.
-    
-    This tool uses specialized scientific paper embeddings (SPECTER) to find papers
-    by semantic similarity against full paper content (not just title/abstract).
-    Returns relevant text segments from papers that match the query.
-    
-    Args:
-        query: Describe the specific concepts, methods, or findings you're looking for
-        limit: Maximum number of results to return (default: 10, max: 30)
-        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results
-    
-    Returns:
-        List of papers with relevant text segments and similarity scores
     """
     try:
         # Initialize Qdrant service
@@ -358,3 +389,26 @@ def vector_search_papers(
         
     except Exception as e:
         return [{"error": f"Vector search failed: {str(e)}"}]
+
+@tool
+def vector_search_papers(
+    query: str,
+    limit: int = 10,
+    score_threshold: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using deep semantic vector search with full-text content retrieval.
+    
+    This tool uses specialized scientific paper embeddings (SPECTER) to find papers
+    by semantic similarity against full paper content (not just title/abstract).
+    Returns relevant text segments from papers that match the query.
+    
+    Args:
+        query: Describe the specific concepts, methods, or findings you're looking for
+        limit: Maximum number of results to return (default: 10, max: 30)
+        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results
+    
+    Returns:
+        List of papers with relevant text segments and similarity scores
+    """
+    return vector_search_papers_impl(query, limit, score_threshold)

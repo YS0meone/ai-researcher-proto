@@ -25,7 +25,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-model = init_chat_model(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 # ============================================================================
 # STRUCTURED OUTPUT MODELS

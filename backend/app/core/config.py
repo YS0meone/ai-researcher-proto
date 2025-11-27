@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     LANGSMITH_TRACING: bool
     LANGSMITH_API_KEY: str
     OPENAI_API_KEY: str
+    MODEL_NAME: str
 
     DATABASE_URL: str
     DATABASE_ASYNC_URL: str

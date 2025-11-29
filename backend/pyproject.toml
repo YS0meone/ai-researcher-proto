@@ -28,4 +28,8 @@ dependencies = [
     "langchain-qdrant>=0.2.1",
     "langchain-huggingface>=0.3.1",
     "tqdm>=4.66.0",
+    "huggingface-hub>=0.36.0",
+    "mlcroissant>=1.0.22",
+    "pyarrow>=22.0.0",
+    "fastparquet>=2024.11.0",
 ]

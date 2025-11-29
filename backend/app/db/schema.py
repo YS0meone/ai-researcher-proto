@@ -7,17 +7,17 @@ class ArxivPaper(BaseModel):
     
     # Required fields
     id: str = Field(..., description="ArXiv ID (e.g., '0704.0001')")
-    submitter: str = Field(..., description="Name of the submitter")
-    authors: str = Field(..., description="Authors as a string (e.g., 'C. Bal\\'azs, E. L. Berger')")
     title: str = Field(..., description="Paper title")
     abstract: str = Field(..., description="Paper abstract")
     
     # Optional fields
+    submitter: Optional[str] = Field(None, description="Name of the submitter")
+    authors: Optional[str] = Field(None, description="Authors as a string (e.g., 'C. Bal\\'azs, E. L. Berger')")
     comments: Optional[str] = Field(None, description="Additional comments")
     journal_ref: Optional[str] = Field(None, alias="journal-ref", description="Journal reference")
     doi: Optional[str] = Field(None, description="Digital Object Identifier")
     report_no: Optional[str] = Field(None, alias="report-no", description="Report number")
-    categories: str = Field(..., description="Space-separated categories (e.g., 'hep-ph')")
+    categories: Optional[str] = Field(None, description="Space-separated categories (e.g., 'hep-ph')")
     license: Optional[str] = Field(None, description="License information")
     supporting_detail: Optional[str] = Field(None, description="Supporting detail")
     

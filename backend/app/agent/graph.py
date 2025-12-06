@@ -1,5 +1,5 @@
 from typing import Annotated, List, Dict, Any, Optional, Literal, Sequence
-from langchain.chat_models import init_chat_model
+from langchain_deepseek import ChatDeepSeek
 from langchain.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -25,7 +25,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+model = ChatDeepSeek(
+    model=settings.MODEL_NAME,
+    api_key=settings.OPENAI_API_KEY,
+    temperature=0,  # 使用0温度以获得更确定性的输出
+    max_retries=3
+)
 
 # ============================================================================
 # STRUCTURED OUTPUT MODELS
@@ -57,9 +62,9 @@ class SearchToolCall(BaseModel):
     tool_name: Literal["hybrid_search_papers", "semantic_search_papers", 
                        "keyword_search_papers", "vector_search_papers",
                        "search_papers_by_category"]
-    query: str
+    query: Optional[str] = None
     limit: int = 15
-    reasoning: str  # Why this tool for this query
+    reasoning: Optional[str] = None  # Why this tool for this query
 
 class SearchPlan(BaseModel):
     """Structured output for search planning."""
@@ -122,16 +127,44 @@ def search_agent(state: State) -> Dict:
     )
     
     structured_model = model.with_structured_output(SearchPlan)
-    plan = structured_model.invoke([
-        SystemMessage(content=SearchAgentPrompts.SYSTEM),
-        *state.messages,
-        HumanMessage(content=prompt)
-    ])
+    try:
+        plan = structured_model.invoke([
+            SystemMessage(content=SearchAgentPrompts.SYSTEM),
+            *state.messages,
+            HumanMessage(content=prompt)
+        ])
+    except Exception as e:
+        logger.error(f"Error generating search plan: {e}")
+        # Fallback to simple hybrid search
+        plan = SearchPlan(
+            tool_calls=[SearchToolCall(
+                tool_name="hybrid_search_papers",
+                query=user_msg,
+                limit=15,
+                reasoning="Fallback to basic hybrid search"
+            )],
+            strategy="Using fallback hybrid search due to planning error"
+        )
+    
+    # Filter out invalid tool calls (missing query)
+    valid_tool_calls = [tc for tc in plan.tool_calls if tc.query and tc.query.strip()]
+    
+    if not valid_tool_calls:
+        # If no valid tool calls, use the user query directly
+        valid_tool_calls = [SearchToolCall(
+            tool_name="hybrid_search_papers",
+            query=user_msg,
+            limit=15,
+            reasoning="Using user query directly"
+        )]
+    
+    # Limit to max 3 tool calls to avoid overwhelming the system
+    valid_tool_calls = valid_tool_calls[:3]
     
     # Build tool instructions from the plan
     tool_instructions = f"Execute the following search strategy: {plan.strategy}\n\nSearches to perform:\n"
-    for tc in plan.tool_calls:
-        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
+    for tc in valid_tool_calls:
+        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning or 'N/A'}\n"
     
     # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
     tool_bound = model.bind_tools([
@@ -149,7 +182,7 @@ def search_agent(state: State) -> Dict:
     ])
     
     # Extract queries for state tracking
-    queries = [tc.query for tc in plan.tool_calls]
+    queries = [tc.query for tc in valid_tool_calls if tc.query]
     seen = set(q.lower() for q in state.search_queries)
     merged = state.search_queries + [q for q in queries if q and q.lower() not in seen]
     

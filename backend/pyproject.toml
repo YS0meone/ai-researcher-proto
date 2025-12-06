@@ -32,4 +32,5 @@ dependencies = [
     "mlcroissant>=1.0.22",
     "pyarrow>=22.0.0",
     "fastparquet>=2024.11.0",
+    "langchain-deepseek>=0.1.0",
 ]

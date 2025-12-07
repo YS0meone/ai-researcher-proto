@@ -1,7 +1,10 @@
 import re
+
+from langchain_core.documents import Document
 from app.core.config import QdrantConfig
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchAny
 from qdrant_client.http.models import Distance, VectorParams
 from langchain_huggingface import HuggingFaceEmbeddings
 from app.db.schema import ArxivPaper
@@ -10,6 +13,7 @@ from pathlib import Path
 import logging
 from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers import GrobidParser
+
 
 logger = logging.getLogger(__name__)
 embeddings = HuggingFaceEmbeddings(model_name="allenai-specter") 
@@ -80,6 +84,13 @@ class QdrantService:
         self.vector_store.add_documents(docs)
         logging.info(f"Added paper {paper.id} to Qdrant")
     
+    def add_paper_with_chunks(self, paper: ArxivPaper, chunks: list[str]):
+        print(paper.model_dump())
+        docs = [Document(page_content=chunk, metadata=paper.model_dump()) for chunk in chunks]
+        self.vector_store.add_documents(docs)
+        logging.info(f"Added {len(docs)} chunks to Qdrant")
+
+    
     def add_papers_batch(self, papers: list['ArxivPaper']):
         self.empty_pdf_folder()
         self.download_pdf_batch(papers)
@@ -143,4 +154,40 @@ class QdrantService:
         
         logger.info(f"Found {len(results)} papers for query: {query[:50]}...")
         return results
+    
+    def search_selected_ids(self, ids: list[str], query: str, k: int = 10, score_threshold: float = None) -> list[tuple[ArxivPaper, float]]:
+        filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.id",
+                    match=MatchAny(any=ids)
+                )
+            ]
+        )
+        if score_threshold is not None:
+            docs_and_scores = self.vector_store.similarity_search_with_score(
+                query,
+                k=k,
+                score_threshold=score_threshold,
+                filter=filter
+            )
+        else:
+            docs_and_scores = self.vector_store.similarity_search_with_score(
+                query,
+                k=k,
+                filter=filter
+            )
+        results = []
+        for doc, score in docs_and_scores:
+            metadata = doc.metadata.copy()
+            metadata['supporting_detail'] = doc.page_content
+            # Create ArxivPaper object from metadata
+            try:
+                paper = ArxivPaper(**metadata)
+                results.append((paper, score))
+            except Exception as e:
+                logger.warning(f"Failed to create ArxivPaper from metadata: {e}")
+                continue
         
+        logger.info(f"Found {len(results)} papers for ids: {ids[:50]}...")
+        return results

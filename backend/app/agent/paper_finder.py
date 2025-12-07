@@ -1,23 +1,17 @@
-from typing import Annotated, List, Dict, Any, Optional, Literal, Sequence
+from typing import List, Dict, Any, Optional, Literal
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from app.core.config import settings
 from app.tools.search import (
     hybrid_search_papers,
     semantic_search_papers,
     keyword_search_papers,
-    search_papers_by_category,
-    search_papers,
-    get_paper_details,
     vector_search_papers,
 )
 from app.agent.prompts import (
-    RouterPrompts,
     RerankingPrompts,
-    SynthesisPrompts,
     SearchAgentPrompts,
 )
 from pydantic import BaseModel, Field
@@ -27,16 +21,7 @@ from app.agent.utils import get_user_query
 
 logger = logging.getLogger(__name__)
 
-model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
-
-# ============================================================================
-# STRUCTURED OUTPUT MODELS
-# ============================================================================
-
-class RouterDecision(BaseModel):
-    """Structured output for routing decisions."""
-    route: Literal["search", "synthesize"]
-    short_reason: str
+paper_finder_model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 class QueryGeneration(BaseModel):
     """Structured output for query generation."""
@@ -69,28 +54,6 @@ class RerankingResult(BaseModel):
     brief_reasoning: Optional[str] = None
 
 
-# ============================================================================
-# GRAPH NODES
-# ============================================================================
-
-def router(state: State) -> Dict:
-    user_msg = get_user_query(state["messages"])
-    prompt = RouterPrompts.format_decision(
-        user_msg=user_msg,
-        num_papers=len(state.get("papers", [])),
-        coverage_score=state.get("coverage_score", 0.0),
-        search_queries=state.get("search_queries", [])
-    )
-    
-    structured_model = model.with_structured_output(RouterDecision)
-    result = structured_model.invoke([
-        SystemMessage(content=RouterPrompts.SYSTEM),
-        *state["messages"],
-        HumanMessage(content=prompt)
-    ])
-    
-    return {"route": result.route, "messages": [HumanMessage(content=f"Routing decision: {result.route}. Reason: {result.short_reason}")]}
-
 def search_agent(state: State) -> Dict:
     """
     Unified search agent that generates queries and selects tools.
@@ -104,8 +67,8 @@ def search_agent(state: State) -> Dict:
         search_queries=state.get("search_queries", [])
     )
     
-    structured_model = model.with_structured_output(SearchPlan)
-    plan = structured_model.invoke([
+    paper_finder_model = paper_finder_model.with_structured_output(SearchPlan)
+    plan = paper_finder_model.invoke([
         SystemMessage(content=SearchAgentPrompts.SYSTEM),
         *state["messages"],
         HumanMessage(content=prompt)
@@ -117,11 +80,10 @@ def search_agent(state: State) -> Dict:
         tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
     
     # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
-    tool_bound = model.bind_tools([
+    tool_bound = paper_finder_model.bind_tools([
         hybrid_search_papers,
         semantic_search_papers,
         keyword_search_papers,
-        search_papers_by_category,
         vector_search_papers,
     ])
     
@@ -211,8 +173,8 @@ def merge_and_rerank(state: State) -> Dict:
         candidates=short_list
     )
     
-    structured_model = model.with_structured_output(RerankingResult)
-    result = structured_model.invoke([
+    paper_finder_model = paper_finder_model.with_structured_output(RerankingResult)
+    result = paper_finder_model.invoke([
         SystemMessage(content=RerankingPrompts.SYSTEM),
         *state["messages"],
         HumanMessage(content=prompt)
@@ -246,108 +208,28 @@ def decide_next(state: State):
 def increment_iter(state: State) -> Dict:
     return {"iter": state.get("iter", 0) + 1}
 
-def synthesize(state: State) -> Dict:
-    import sys
-    user_msg = get_user_query(state["messages"])
-    papers = state.get("papers", [])
-    
-    # First, determine if we need deep content search
-    decision_prompt = SynthesisPrompts.format_decision(
-        user_msg=user_msg,
-        num_papers=len(papers)
-    )
-    
-    structured_model = model.with_structured_output(SynthesisDecision)
-    decision = structured_model.invoke([
-        SystemMessage(content=SynthesisPrompts.DECISION_SYSTEM),
-        *state["messages"],
-        HumanMessage(content=decision_prompt)
-    ])
-    
-    needs_deep_search = decision.needs_deep_search
-    search_query = decision.search_query or user_msg
-    print(f"Synthesize decision: needs_deep_search={needs_deep_search}, reasoning={decision.reasoning}", file=sys.stderr)
-    
-    # If deep search is needed, call vector_search_papers
-    detailed_segments = []
-    if needs_deep_search and papers:
-        print(f"Performing vector search with query: {search_query}", file=sys.stderr)
-        try:
-            # Call vector_search_papers tool directly
-            results = vector_search_papers.invoke({"query": search_query, "limit": 5})
-            if isinstance(results, list) and results:
-                detailed_segments = results
-                print(f"Vector search returned {len(detailed_segments)} results with detailed segments", file=sys.stderr)
-        except Exception as e:
-            print(f"Vector search failed: {e}", file=sys.stderr)
-    
-    # Build paper details from state
-    paper_details = []
-    for p in papers[:10]:
-        paper_details.append({
-            "arxiv_id": p.get("arxiv_id"),
-            "title": p.get("title"),         
-            "abstract": p.get("abstract"),
-            "authors": p.get("authors"),
-            "categories": p.get("categories"),
-        })
-    
-    # Produce final grounded answer
-    if detailed_segments:
-        answer_prompt = SynthesisPrompts.format_answer_with_details(
-            user_msg=user_msg,
-            paper_details=paper_details[:5],
-            detailed_segments=detailed_segments
-        )
-    else:
-        answer_prompt = SynthesisPrompts.format_answer_basic(
-            user_msg=user_msg,
-            paper_details=paper_details
-        )
-    
-    final = model.invoke([
-        SystemMessage(content=SynthesisPrompts.ANSWER_SYSTEM),
-        *state["messages"],
-        HumanMessage(content=answer_prompt)
-    ])
-    return {"messages": [final]}
 
-# Build graph
-graph_builder = StateGraph(State)
-graph_builder.add_node("router", router)
-graph_builder.add_node("search_agent", search_agent)
-graph_builder.add_node("tools", ToolNode([
+pf_graph_builder = StateGraph(State)
+pf_graph_builder.add_node("search_agent", search_agent)
+pf_graph_builder.add_node("tools", ToolNode([
     hybrid_search_papers,
     semantic_search_papers,
     keyword_search_papers,
-    search_papers_by_category,
-    search_papers,
-    get_paper_details,
     vector_search_papers,
 ]))
-graph_builder.add_node("merge_and_rerank", merge_and_rerank)
-graph_builder.add_node("increment_iter", increment_iter)
-graph_builder.add_node("synthesize", synthesize)
+pf_graph_builder.add_node("merge_and_rerank", merge_and_rerank)
+pf_graph_builder.add_node("increment_iter", increment_iter)
 
-graph_builder.add_edge(START, "router")
+pf_graph_builder.add_edge(START, "search_agent")
 
-def route_branch(state: State):
-    return "search" if state.get("route") == "search" else "synthesize"
+pf_graph_builder.add_edge("search_agent", "tools")
+pf_graph_builder.add_edge("tools", "merge_and_rerank")
 
-graph_builder.add_conditional_edges("router", route_branch, {
-    "search": "search_agent",
-    "synthesize": "synthesize",
-})
-
-# Search loop
-graph_builder.add_edge("search_agent", "tools")
-graph_builder.add_edge("tools", "merge_and_rerank")
-
-graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
+pf_graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
     "search_more": "increment_iter",
     "synthesize": "synthesize",
 })
-graph_builder.add_edge("increment_iter", "search_agent")
+pf_graph_builder.add_edge("increment_iter", "search_agent")
 
-graph_builder.add_edge("synthesize", END)
-graph = graph_builder.compile()
+pf_graph_builder.add_edge("synthesize", END)
+pf_graph = pf_graph_builder.compile()

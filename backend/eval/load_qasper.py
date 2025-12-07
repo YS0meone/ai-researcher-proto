@@ -1,4 +1,5 @@
 from pprint import pprint
+from typing import Literal, Optional, TypedDict
 from huggingface_hub import login
 from app.core.config import settings
 from mlcroissant import Dataset
@@ -8,12 +9,49 @@ from app.db.schema import ArxivPaper
 from app.services.elasticsearch import ElasticsearchService
 from app.services.qdrant import QdrantService
 from app.core.config import settings
+from numpy.typing import NDArray
 
 
 es_service = ElasticsearchService(settings.elasticsearch_config)
 qdrant_service = QdrantService(settings.qdrant_config)
 
-def convert_to_ArxivPaper(d: dict) -> ArxivPaper:
+class FullText(TypedDict):
+    section_name: NDArray[str]
+    paragraphs: NDArray[NDArray[str]]
+
+class Answer(TypedDict):
+    unanswerable: bool
+    extractive_spans: NDArray[str]
+    yes_no: Optional[Literal["yes", "no"]]
+    free_form_answer: str
+    evidence: NDArray[str]
+    highlighted_evidence: NDArray[str]
+    annotation_id: str
+    worker_id: str
+
+class QAS(TypedDict):
+    question: NDArray[str]
+    question_id: NDArray[str]
+    nlp_background: NDArray[str]
+    topic_background: NDArray[str]
+    paper_read: NDArray[str]
+    search_query: NDArray[str]
+    question_writer: NDArray[str]
+    answers: NDArray[NDArray[Answer]]
+
+class FiguresAndTables(TypedDict):
+    caption: NDArray[str]
+    file: NDArray[str]
+
+class QasperPaper(TypedDict):
+    id: str
+    title: str
+    abstract: str
+    full_text: FullText
+    qas: QAS
+    figures_and_tables: FiguresAndTables
+
+def convert_to_ArxivPaper(d: QasperPaper) -> ArxivPaper:
     return ArxivPaper(
         id=d["id"],
         title=d["title"],
@@ -29,9 +67,11 @@ def load_qasper_to_db(papers_df: pd.DataFrame) -> ArxivPaper:
             break
         d = row.to_dict()
         paper = convert_to_ArxivPaper(d)
+        flattened_paragraphs = [para for section in d["full_text"]["paragraphs"] for para in section]
         es_service.add_paper(paper)
-        print(f"Added paper {paper.id}")
-    
+        qdrant_service.add_paper_with_chunks(paper, flattened_paragraphs)
+        
+
 def main():
     train_df = pd.read_parquet(Path(__file__).parent / "data" / "train.parquet")
     test_df = pd.read_parquet(Path(__file__).parent / "data" / "test.parquet")
@@ -40,7 +80,6 @@ def main():
     load_qasper_to_db(papers_df)
 
 if __name__ == "__main__":
-    login(token=settings.HF_TOKEN)
     main()
 
 

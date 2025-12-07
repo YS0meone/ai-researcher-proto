@@ -38,7 +38,7 @@ An AI-powered research assistant that helps users discover and analyze academic 
 - **Node.js 20+** with pnpm
 - **Docker & Docker Compose** for services
 - **16GB+ RAM** recommended for parallel processing
-- **OpenAI API Key** for GPT-4o-mini inference
+- **DeepSeek API Key** (or OpenAI API Key) for LLM inference
 
 ## 🚀 Quick Start
 
@@ -60,7 +60,8 @@ cp backend/.env_example backend/.env
 ```
 
 Edit `backend/.env` with:
-- Your `OPENAI_API_KEY`
+- Your `OPENAI_API_KEY` (DeepSeek API key - uses same variable name)
+- `MODEL_NAME=deepseek-chat` for DeepSeek (or `gpt-4o-mini` for OpenAI)
 - Path to ArXiv metadata JSON (`LOADER_ARXIV_METADATA_PATH`)
 - Data pipeline settings (workers, batch size, PDF processing)
 

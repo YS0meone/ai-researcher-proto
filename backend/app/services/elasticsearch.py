@@ -16,22 +16,33 @@ def get_embedding_model():
     if _embedding_model_singleton is None:
         print("Loading embedding model: allenai-specter", flush=True)
         try:
-            # Explicitly avoid meta device and force eager loading
+            # Set environment variables to avoid meta tensor issues
             import os
             os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
             
+            # Disable PyTorch's meta device to avoid copy errors
+            torch.set_default_dtype(torch.float32)
+            
+            # Load model with trust_remote_code and device mapping
             _embedding_model_singleton = SentenceTransformer(
                 'allenai-specter',
                 device='cpu',
-                # Additional args to ensure proper loading
-                cache_folder=None,  # Use default cache
+                cache_folder=None,
+                trust_remote_code=False,
             )
             
-            # Force evaluation mode and verify model is loaded
+            # Ensure model is on CPU and materialized (not meta)
+            _embedding_model_singleton.to('cpu')
             _embedding_model_singleton.eval()
             
+            # Disable gradient computation
+            for param in _embedding_model_singleton.parameters():
+                param.requires_grad = False
+            
             # Test encode to ensure model is fully initialized
-            test_embedding = _embedding_model_singleton.encode("test", show_progress_bar=False)
+            with torch.no_grad():
+                test_embedding = _embedding_model_singleton.encode("test", show_progress_bar=False)
             print(f"Embedding model loaded successfully on cpu (test embedding shape: {test_embedding.shape})", flush=True)
             
         except Exception as e:

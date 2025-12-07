@@ -2,10 +2,10 @@ import arxiv
 from pathlib import Path
 import multiprocessing
 import re
-from grobid_client.grobid_client import GrobidClient
-from langchain_community.document_loaders.parsers import GrobidParser
-from langchain_community.document_loaders.generic import GenericLoader
-from langchain_community.document_loaders.base import BaseBlobParser
+# from grobid_client.grobid_client import GrobidClient
+# from langchain_community.document_loaders.parsers import GrobidParser
+# from langchain_community.document_loaders.generic import GenericLoader
+# from langchain_community.document_loaders.base import BaseBlobParser
 from app.db.models import Paper
 from app.core.config import settings
 from sqlalchemy.orm import sessionmaker, scoped_session

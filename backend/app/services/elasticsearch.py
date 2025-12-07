@@ -14,9 +14,7 @@ def get_embedding_model():
     """Get or create the singleton embedding model instance."""
     global _embedding_model_singleton
     if _embedding_model_singleton is None:
-        print("Loading embedding model: allenai-specter", flush=True)
         try:
-            # Set environment variables to avoid meta tensor issues
             import os
             os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
             os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
@@ -42,9 +40,8 @@ def get_embedding_model():
             
             # Test encode to ensure model is fully initialized
             with torch.no_grad():
-                test_embedding = _embedding_model_singleton.encode("test", show_progress_bar=False)
-            print(f"Embedding model loaded successfully on cpu (test embedding shape: {test_embedding.shape})", flush=True)
-            
+                _ = _embedding_model_singleton.encode("test", show_progress_bar=False)
+                
         except Exception as e:
             print(f"Error loading embedding model: {e}", flush=True)
             raise
@@ -53,7 +50,6 @@ def get_embedding_model():
 class ElasticsearchService:
     def __init__(self, config: ElasticsearchConfig):
         auth = (config.username, config.password) if config.username and config.password else None
-        print(config.url)
         self.client = Elasticsearch(
             [config.url], basic_auth=auth,
             verify_certs=False,
@@ -63,9 +59,7 @@ class ElasticsearchService:
         # Use singleton embedding model
         self.embedding_model = get_embedding_model()
         self._wait_for_connection()
-        is_healthy = self.client.ping()
-        print(is_healthy)   
-        if not is_healthy:
+        if not self.client.ping():
             raise ConnectionError("Failed to connect to Elasticsearch")
         self.create_index()
 
@@ -113,7 +107,6 @@ class ElasticsearchService:
         
         # Check if index already exists
         if self.client.indices.exists(index=target_index):
-            print(f"Index '{target_index}' already exists")
             return True
         
         # Define the mapping for the papers index (matching the Paper model schema)

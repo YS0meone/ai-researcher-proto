@@ -33,4 +33,6 @@ dependencies = [
     "pyarrow>=22.0.0",
     "fastparquet>=2024.11.0",
     "langchain-deepseek>=0.1.0",
+    "numpy>=1.26.0",
+    "matplotlib>=3.8.0",
 ]

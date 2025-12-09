@@ -10,12 +10,9 @@ from app.tools.search import (
     semantic_search_papers,
     keyword_search_papers,
     search_papers_by_category,
-    search_papers,
-    get_paper_details,
     vector_search_papers,
 )
 from app.agent.prompts import (
-    RouterPrompts,
     RerankingPrompts,
     SynthesisPrompts,
     SearchAgentPrompts,
@@ -68,28 +65,46 @@ class RerankingResult(BaseModel):
     coverage_score: float = Field(ge=0.0, le=1.0)
     brief_reasoning: Optional[str] = None
 
+class IntentDecision(BaseModel):
+    """Orchestrator intent output."""
+    intent: Literal["search_then_qa", "qa_only", "search_only"]
+    reasoning: str
+
 
 # ============================================================================
 # GRAPH NODES
 # ============================================================================
+def orchestrator(state: State) -> Dict:
+    """
+    Top-level intent router. Decides whether to:
+    - run search then QA,
+    - jump directly to QA (if coverage高且已有论文),
+    - 或仅搜索（不立即回答）。
+    """
+    user_msg = get_user_query(state.get("messages", []))
+    papers = state.get("papers", []) or []
+    coverage = state.get("coverage_score", 0.0)
+    iter_count = state.get("iter", 0) or 0
+    max_iters = state.get("max_iters", 3) or 3
 
-def router(state: State) -> Dict:
-    user_msg = get_user_query(state["messages"])
-    prompt = RouterPrompts.format_decision(
-        user_msg=user_msg,
-        num_papers=len(state.get("papers", [])),
-        coverage_score=state.get("coverage_score", 0.0),
-        search_queries=state.get("search_queries", [])
-    )
-    
-    structured_model = model.with_structured_output(RouterDecision)
-    result = structured_model.invoke([
-        SystemMessage(content=RouterPrompts.SYSTEM),
-        *state["messages"],
-        HumanMessage(content=prompt)
-    ])
-    
-    return {"route": result.route, "messages": [HumanMessage(content=f"Routing decision: {result.route}. Reason: {result.short_reason}")]}
+    # 简单启发式：如果还没搜过或覆盖低，先搜；否则可直接 QA
+    if not papers:
+        intent = "search_then_qa"
+        reason = "No papers yet; need retrieval first."
+    elif coverage >= 0.65:
+        intent = "qa_only"
+        reason = f"Coverage {coverage:.2f} >= 0.65; proceed to QA."
+    elif iter_count >= max_iters:
+        intent = "qa_only"
+        reason = f"Reached max iters {iter_count}; proceed to QA with current papers."
+    else:
+        intent = "search_then_qa"
+        reason = f"Coverage {coverage:.2f} below 0.65; continue retrieval."
+
+    return {
+        "route": "synthesize" if intent == "qa_only" else "search",
+        "messages": [HumanMessage(content=f"Intent: {intent}. Reason: {reason}")],
+    }
 
 def search_agent(state: State) -> Dict:
     """
@@ -314,27 +329,27 @@ def synthesize(state: State) -> Dict:
 
 # Build graph
 graph_builder = StateGraph(State)
-graph_builder.add_node("router", router)
+graph_builder.add_node("orchestrator", orchestrator)
 graph_builder.add_node("search_agent", search_agent)
 graph_builder.add_node("tools", ToolNode([
     hybrid_search_papers,
     semantic_search_papers,
     keyword_search_papers,
     search_papers_by_category,
-    search_papers,
-    get_paper_details,
     vector_search_papers,
 ]))
 graph_builder.add_node("merge_and_rerank", merge_and_rerank)
 graph_builder.add_node("increment_iter", increment_iter)
 graph_builder.add_node("synthesize", synthesize)
 
-graph_builder.add_edge(START, "router")
+# Entry: orchestrator decides whether to search or jump to QA
+graph_builder.add_edge(START, "orchestrator")
 
 def route_branch(state: State):
-    return "search" if state.get("route") == "search" else "synthesize"
+    # orchestrator sets route: "search" or "synthesize"
+    return state.get("route") or "search"
 
-graph_builder.add_conditional_edges("router", route_branch, {
+graph_builder.add_conditional_edges("orchestrator", route_branch, {
     "search": "search_agent",
     "synthesize": "synthesize",
 })

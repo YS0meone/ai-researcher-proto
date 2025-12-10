@@ -9,42 +9,47 @@ import torch
 
 # Global singleton for embedding model to avoid reloading
 _embedding_model_singleton = None
+_embedding_model_lock = None
 
 def get_embedding_model():
-    """Get or create the singleton embedding model instance."""
-    global _embedding_model_singleton
+    """Get or create the singleton embedding model instance (thread-safe)."""
+    global _embedding_model_singleton, _embedding_model_lock
+    import threading
+    
+    # Initialize lock if needed
+    if _embedding_model_lock is None:
+        _embedding_model_lock = threading.Lock()
+    
+    # Double-checked locking pattern
     if _embedding_model_singleton is None:
-        try:
-            import os
-            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-            os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
-            
-            # Disable PyTorch's meta device to avoid copy errors
-            torch.set_default_dtype(torch.float32)
-            
-            # Load model with trust_remote_code and device mapping
-            _embedding_model_singleton = SentenceTransformer(
-                'allenai-specter',
-                device='cpu',
-                cache_folder=None,
-                trust_remote_code=False,
-            )
-            
-            # Ensure model is on CPU and materialized (not meta)
-            _embedding_model_singleton.to('cpu')
-            _embedding_model_singleton.eval()
-            
-            # Disable gradient computation
-            for param in _embedding_model_singleton.parameters():
-                param.requires_grad = False
-            
-            # Test encode to ensure model is fully initialized
-            with torch.no_grad():
-                _ = _embedding_model_singleton.encode("test", show_progress_bar=False)
-                
-        except Exception as e:
-            print(f"Error loading embedding model: {e}", flush=True)
-            raise
+        with _embedding_model_lock:
+            if _embedding_model_singleton is None:
+                print("Loading embedding model: allenai-specter", flush=True)
+                try:
+                    import os
+                    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+                    
+                    # Load model with explicit settings to avoid meta tensor issues
+                    model = SentenceTransformer(
+                        'allenai-specter',
+                        device='cpu',
+                    )
+                    
+                    # Force full materialization
+                    model.eval()
+                    for param in model.parameters():
+                        param.data  # Force tensor materialization
+                    
+                    # Verify with test encode
+                    test_embedding = model.encode("test", show_progress_bar=False)
+                    print(f"Embedding model loaded on cpu (shape: {test_embedding.shape})", flush=True)
+                    
+                    _embedding_model_singleton = model
+                    
+                except Exception as e:
+                    print(f"Error loading embedding model: {e}", flush=True)
+                    raise
+    
     return _embedding_model_singleton
 
 class ElasticsearchService:

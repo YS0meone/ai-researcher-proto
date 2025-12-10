@@ -412,3 +412,76 @@ def vector_search_papers(
         List of papers with relevant text segments and similarity scores
     """
     return vector_search_papers_impl(query, limit, score_threshold)
+
+
+def vector_search_papers_by_ids_impl(
+    query: str,
+    limit: int = 10,
+    score_threshold: Optional[float] = None,
+    ids: List[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using deep semantic vector search with full-text content retrieval.
+    """
+    try:
+        # Initialize Qdrant service
+        qdrant_service = QdrantService(settings.qdrant_config)
+        
+        # Perform vector search
+        results = qdrant_service.search_selected_ids(
+            ids=ids,
+            query=query,
+            k=min(limit, 30),
+            score_threshold=score_threshold,
+        )
+        
+        # Format results
+        formatted_results = []
+        for paper, score in results:
+            # Truncate abstract if too long
+            abstract = paper.abstract
+            if len(abstract) > 400:
+                abstract = abstract[:400] + '...'
+            
+            # Truncate supporting detail if too long
+            supporting_detail = paper.supporting_detail or ""
+            if len(supporting_detail) > 500:
+                supporting_detail = supporting_detail[:500] + '...'
+            
+            formatted_result = {
+                'arxiv_id': paper.id,
+                'title': paper.title,
+                'authors': paper.authors,
+                'abstract': abstract,
+                'categories': paper.categories,
+                'supporting_detail': supporting_detail,
+                'similarity_score': round(float(score), 3),
+                'url': f"https://arxiv.org/abs/{paper.id}"
+            }
+            formatted_results.append(formatted_result)
+        
+        return formatted_results
+        
+    except Exception as e:
+        return [{"error": f"Vector search failed: {str(e)}"}]
+
+@tool
+def vector_search_papers_by_ids(
+    query: str,
+    limit: int = 10,
+    score_threshold: Optional[float] = None,
+    ids: List[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search papers using deep semantic vector search with full-text content retrieval by arXiv IDs.
+    
+    Args:
+        query: The search query string
+        limit: Maximum number of results to return (default: 10, max: 30)
+        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results
+        ids: List of arXiv IDs to search for
+    
+    Returns:
+        List of papers with relevant text segments and similarity scores
+    """
+    return vector_search_papers_by_ids_impl(query, limit, score_threshold, ids)

@@ -1,5 +1,5 @@
 from typing import Annotated, List, Dict, Any, Optional, Literal, Sequence
-from langchain.chat_models import init_chat_model
+from langchain_deepseek import ChatDeepSeek
 from langchain.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -24,7 +24,12 @@ from app.agent.utils import get_user_query
 
 logger = logging.getLogger(__name__)
 
-model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+model = ChatDeepSeek(
+    model=settings.MODEL_NAME,
+    api_key=settings.OPENAI_API_KEY,
+    temperature=0,  # 使用0温度以获得更确定性的输出
+    max_retries=3
+)
 
 # ============================================================================
 # STRUCTURED OUTPUT MODELS
@@ -50,7 +55,7 @@ class SearchToolCall(BaseModel):
     tool_name: Literal["hybrid_search_papers", "semantic_search_papers", 
                        "keyword_search_papers", "vector_search_papers",
                        "search_papers_by_category"]
-    query: str
+    query: Optional[str] = None
     limit: int = 15
     reasoning: str
 
@@ -128,8 +133,8 @@ def search_agent(state: State) -> Dict:
     
     # Build tool instructions from the plan
     tool_instructions = f"Execute the following search strategy: {plan.strategy}\n\nSearches to perform:\n"
-    for tc in plan.tool_calls:
-        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
+    for tc in valid_tool_calls:
+        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning or 'N/A'}\n"
     
     # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
     tool_bound = model.bind_tools([

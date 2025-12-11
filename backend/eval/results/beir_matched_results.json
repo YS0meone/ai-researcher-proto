@@ -1,0 +1,44 @@
+{
+  "Hybrid Search": {
+    "method": "Hybrid Search",
+    "num_queries": 276,
+    "precision@5": 0.045652173913043485,
+    "precision@10": 0.03333333333333333,
+    "recall@10": 0.20187198067632847,
+    "recall@20": 0.2803140096618358,
+    "ndcg@10": 0.14708367276409984,
+    "mrr": 0.16652465779535372,
+    "avg_latency_ms": 755.6932939999346,
+    "median_latency_ms": 749.1937875747681,
+    "p95_latency_ms": 1152.600884437561,
+    "p99_latency_ms": 1317.6172375679016
+  },
+  "Semantic Search": {
+    "method": "Semantic Search",
+    "num_queries": 276,
+    "precision@5": 0.0,
+    "precision@10": 0.0,
+    "recall@10": 0.0,
+    "recall@20": 0.0,
+    "ndcg@10": 0.0,
+    "mrr": 0.0,
+    "avg_latency_ms": 37.84059182457302,
+    "median_latency_ms": 33.99991989135742,
+    "p95_latency_ms": 62.20519542694092,
+    "p99_latency_ms": 80.402672290802
+  },
+  "Keyword Search": {
+    "method": "Keyword Search",
+    "num_queries": 276,
+    "precision@5": 0.045652173913043485,
+    "precision@10": 0.03333333333333333,
+    "recall@10": 0.20187198067632847,
+    "recall@20": 0.2803140096618358,
+    "ndcg@10": 0.14708367276409984,
+    "mrr": 0.16652465779535372,
+    "avg_latency_ms": 604.6409684678782,
+    "median_latency_ms": 600.5841493606567,
+    "p95_latency_ms": 972.1843004226685,
+    "p99_latency_ms": 1134.2821717262268
+  }
+}

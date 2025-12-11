@@ -73,8 +73,8 @@ def search_agent(state: State) -> Dict:
         search_queries=state.get("search_queries", [])
     )
 
-    paper_finder_model = paper_finder_model.with_structured_output(SearchPlan)
-    plan = paper_finder_model.invoke([
+    structured_model = paper_finder_model.with_structured_output(SearchPlan)
+    plan = structured_model.invoke([
         SystemMessage(content=SearchAgentPrompts.SYSTEM),
         *state["messages"],
         HumanMessage(content=prompt)
@@ -189,9 +189,9 @@ def merge_and_rerank(state: State) -> Dict:
         candidates=short_list
     )
 
-    paper_finder_model = paper_finder_model.with_structured_output(
+    structured_model = paper_finder_model.with_structured_output(
         RerankingResult)
-    result = paper_finder_model.invoke([
+    result = structured_model.invoke([
         SystemMessage(content=RerankingPrompts.SYSTEM),
         *state["messages"],
         HumanMessage(content=prompt)

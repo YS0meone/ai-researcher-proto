@@ -58,6 +58,31 @@ class SynthesisDecision(BaseModel):
     reasoning: str
     search_query: Optional[str] = None
 
+class SearchToolCall(BaseModel):
+    """Structured output for a single search tool call."""
+    tool_name: Literal["hybrid_search_papers", "semantic_search_papers", 
+                       "keyword_search_papers", "vector_search_papers",
+                       "search_papers_by_category"]
+    query: Optional[str] = None
+    limit: int = 15
+    reasoning: str
+
+class SearchPlan(BaseModel):
+    """Structured output for search planning."""
+    tool_calls: List[SearchToolCall] = Field(min_length=1, max_length=5)
+    strategy: str
+
+class RerankingResult(BaseModel):
+    """Structured output for paper reranking."""
+    order: List[str]
+    coverage_score: float = Field(ge=0.0, le=1.0)
+    brief_reasoning: Optional[str] = None
+
+class IntentDecision(BaseModel):
+    """Orchestrator intent output."""
+    intent: Literal["search_then_qa", "qa_only", "search_only"]
+    reasoning: str
+
 
 # ============================================================================
 # GRAPH NODES
@@ -89,9 +114,9 @@ def search_agent(state: State) -> Dict:
 
     # Build tool instructions from the plan
     tool_instructions = f"Execute the following search strategy: {plan.strategy}\n\nSearches to perform:\n"
-    for tc in plan.tool_calls:
-        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
-
+    for tc in valid_tool_calls:
+        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning or 'N/A'}\n"
+    
     # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
     tool_bound = model.bind_tools([
         hybrid_search_papers,

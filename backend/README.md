@@ -39,7 +39,7 @@ A LangGraph-powered research assistant with **dual-mode architecture**: discover
 
 - **Python 3.12+** with [uv](https://docs.astral.sh/uv/) for dependency management
 - **Docker & Docker Compose** for services (Elasticsearch, Qdrant, Kibana, GROBID)
-- **OpenAI API key** for LLM inference
+- **DeepSeek API key** (or OpenAI API key) for LLM inference
 - **16GB+ RAM** recommended for parallel processing
 - **ArXiv metadata dataset** (see step 4 below)
 
@@ -60,6 +60,7 @@ uv sync
 
 This installs all required dependencies including:
 - **LangChain & LangGraph** - Agent framework
+- **langchain-deepseek** - DeepSeek LLM integration
 - **FastAPI** - API server
 - **Elasticsearch 8.x** - Full-text search
 - **Qdrant Client** - Vector database
@@ -77,15 +78,20 @@ cp .env_example .env
 Edit `.env` and configure:
 
 ```env
-# Required
-OPENAI_API_KEY=your_openai_api_key_here
+# Required - LLM Configuration
+OPENAI_API_KEY=sk-your-deepseek-api-key-here  # DeepSeek API key (uses same variable)
+MODEL_NAME=deepseek-chat                      # Use deepseek-chat or gpt-4o-mini
 
 # Database URLs (default for Docker)
 ELASTICSEARCH_URL=http://localhost:9200
-ELASTICSEARCH_INDEX=arxiv_papers
+ELASTICSEARCH_INDEX=papers
+ELASTICSEARCH_USERNAME=elastic
+ELASTICSEARCH_PASSWORD=elastic
+
 QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=arxiv_papers
+QDRANT_COLLECTION=papers
 QDRANT_VECTOR_SIZE=768
+QDRANT_DISTANCE=COSINE
 
 # Optional: ArXiv Paper Loader (for general use beyond QASPER)
 LOADER_WORKERS=12              # Number of parallel workers
@@ -676,24 +682,82 @@ open http://localhost:5601
 ## 🐛 Troubleshooting
 
 ### "Cannot copy out of meta tensor" Error
-**Issue**: Embedding model not properly initialized  
-**Solution**: Restart LangGraph server - the singleton pattern will properly load the model
+**Issue**: Embedding model initialization with PyTorch meta device  
+**Solution**: Fixed in latest version. Restart LangGraph server to reload the embedding model with proper device settings.
+
+### Windows Multiprocessing Issues
+**Issue**: `data_pipeline.py` fails with import errors on Windows  
+**Solution**: Use `simple_load.py` instead - a single-process loader designed for Windows compatibility:
+```bash
+uv run python simple_load.py
+```
+
+### "Search results are 0" / Empty Results
+**Issue**: No papers loaded in Elasticsearch  
+**Solution**: 
+1. Check paper count: `curl http://localhost:9200/papers/_count`
+2. If count is 0, run the data loader: `uv run python simple_load.py`
+3. Wait for papers to be indexed (check progress bar)
+
+### DeepSeek API Validation Errors
+**Issue**: `ValidationError for SearchPlan` - missing query fields  
+**Solution**: Already fixed with fallback handling. The agent will use a simple hybrid search if structured output fails.
 
 ### Slow Data Pipeline
-**Issue**: PDF processing is slow  
-**Solution**: Use fast mode (`LOADER_PROCESS_PDFS=false`) for initial loading
+**Issue**: PDF processing is very slow  
+**Solution**: Use fast mode (`LOADER_PROCESS_PDFS=false`) for initial loading - only indexes metadata and embeddings
 
 ### Elasticsearch Connection Failed
 **Issue**: Docker container not running  
-**Solution**: `docker-compose up -d elasticsearch` and verify with `curl http://localhost:9200`
+**Solution**: 
+```bash
+docker-compose up -d elasticsearch
+curl http://localhost:9200  # Verify connection
+```
 
 ### Qdrant Collection Not Found
-**Issue**: Data pipeline hasn't run yet  
-**Solution**: Run `uv run python app/data_pipeline.py` to create collections
+**Issue**: Data pipeline hasn't run yet or failed  
+**Solution**: Run the data loader to create collections and index papers
+
+### Model Loading Takes Too Long
+**Issue**: First request is slow due to model initialization  
+**Solution**: The `allenai-specter` model (~500MB) downloads and loads on first use. Subsequent requests use the singleton instance and are fast.
 
 ## 📚 Additional Resources
 
 - [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [DeepSeek API Documentation](https://platform.deepseek.com/api-docs/)
 - [Elasticsearch Python Client](https://elasticsearch-py.readthedocs.io/)
 - [Qdrant Documentation](https://qdrant.tech/documentation/)
 - [GROBID Documentation](https://grobid.readthedocs.io/)
+
+## 🤖 LLM Configuration
+
+### DeepSeek (Default)
+```env
+MODEL_NAME=deepseek-chat
+OPENAI_API_KEY=sk-your-deepseek-api-key
+```
+
+**Available Models**:
+- `deepseek-chat` - General purpose chat (recommended)
+- `deepseek-coder` - Optimized for code generation
+- `deepseek-reasoner` - Enhanced reasoning capabilities
+
+**Benefits**:
+- 💰 Much cheaper than OpenAI (~1/10th the cost)
+- 🌏 Better Chinese language support
+- ⚡ Fast inference speed
+
+### OpenAI (Alternative)
+```env
+MODEL_NAME=gpt-4o-mini
+OPENAI_API_KEY=sk-your-openai-api-key
+```
+
+**Available Models**:
+- `gpt-4o-mini` - Fast and affordable
+- `gpt-4o` - Most capable
+- `gpt-4-turbo` - Balanced performance
+
+Both providers work identically with the same codebase thanks to LangChain's unified interface.

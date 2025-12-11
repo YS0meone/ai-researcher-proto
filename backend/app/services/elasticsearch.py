@@ -55,7 +55,6 @@ def get_embedding_model():
 class ElasticsearchService:
     def __init__(self, config: ElasticsearchConfig):
         auth = (config.username, config.password) if config.username and config.password else None
-        print(config.url)
         self.client = Elasticsearch(
             [config.url], basic_auth=auth,
             verify_certs=False,
@@ -65,9 +64,7 @@ class ElasticsearchService:
         # Use singleton embedding model
         self.embedding_model = get_embedding_model()
         self._wait_for_connection()
-        is_healthy = self.client.ping()
-        print(is_healthy)   
-        if not is_healthy:
+        if not self.client.ping():
             raise ConnectionError("Failed to connect to Elasticsearch")
         self.create_index()
 
@@ -115,7 +112,6 @@ class ElasticsearchService:
         
         # Check if index already exists
         if self.client.indices.exists(index=target_index):
-            print(f"Index '{target_index}' already exists")
             return True
         
         # Define the mapping for the papers index (matching the Paper model schema)

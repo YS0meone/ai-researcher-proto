@@ -1,6 +1,7 @@
 """
-ASTA-Bench Evaluation for Paper Finder
-Evaluates retrieval performance on academic paper search tasks
+BEIR SCIDOCS Evaluation for Paper Finder
+Uses official BEIR benchmark dataset for academic paper retrieval
+Dataset: SCIDOCS (1,000 queries with human-annotated ground truth)
 """
 import sys
 from pathlib import Path
@@ -11,7 +12,8 @@ sys.path.insert(0, str(backend_dir))
 
 import json
 import time
-from typing import List, Dict, Any, Tuple
+import os
+from typing import List, Dict, Any, Tuple, Set
 from dataclasses import dataclass, asdict
 import numpy as np
 from tqdm import tqdm
@@ -46,22 +48,117 @@ class EvalMetrics:
     num_results: int
 
 
-class ASTABenchmark:
-    """ASTA-bench style evaluation for paper retrieval"""
+class BEIRBenchmark:
+    """BEIR SCIDOCS benchmark for academic paper retrieval"""
     
-    def __init__(self, queries_file: str = None):
+    def __init__(self, dataset_name: str = "scidocs", use_beir: bool = True):
         """
         Initialize benchmark
         
         Args:
-            queries_file: Path to JSON file with test queries
+            dataset_name: BEIR dataset name (default: scidocs)
+            use_beir: Whether to use official BEIR data
         """
         self.queries: List[SearchQuery] = []
-        if queries_file:
-            self.load_queries(queries_file)
+        self.dataset_name = dataset_name
+        self.use_beir = use_beir
+        self.beir_corpus: Dict[str, Dict] = {}
+        self.arxiv_to_beir_mapping: Dict[str, str] = {}
+        
+        if use_beir:
+            self.load_beir_dataset()
     
-    def load_queries(self, file_path: str):
-        """Load test queries from JSON file"""
+    def load_beir_dataset(self):
+        """Load official BEIR SCIDOCS dataset"""
+        try:
+            from beir import util
+            from beir.datasets.data_loader import GenericDataLoader
+            
+            print(f"\n📥 Downloading BEIR {self.dataset_name} dataset...")
+            dataset_path = util.download_and_unzip(
+                f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{self.dataset_name}.zip",
+                "eval/data"
+            )
+            
+            # Load corpus, queries, and qrels
+            corpus, queries, qrels = GenericDataLoader(data_folder=dataset_path).load(split="test")
+            self.beir_corpus = corpus
+            
+            print(f"✅ Loaded {len(queries)} queries with ground truth")
+            print(f"   Corpus: {len(corpus)} documents")
+            
+            # Build title-based mapping for ID matching
+            print("\n🔗 Building title-based ID mapping...")
+            self._build_title_mapping()
+            
+            # Convert to SearchQuery format
+            for query_id, query_text in queries.items():
+                if query_id in qrels:
+                    # Get relevant paper IDs (score >= 1)
+                    beir_relevant_ids = [doc_id for doc_id, score in qrels[query_id].items() if score >= 1]
+                    
+                    # Map BEIR IDs to arXiv IDs
+                    relevant_ids = []
+                    for beir_id in beir_relevant_ids:
+                        if beir_id in self.arxiv_to_beir_mapping.values():
+                            # Find arXiv ID for this BEIR ID
+                            for arxiv_id, mapped_beir_id in self.arxiv_to_beir_mapping.items():
+                                if mapped_beir_id == beir_id:
+                                    relevant_ids.append(arxiv_id)
+                                    break
+                    
+                    # If no mapping found, use BEIR IDs directly (for relative comparison)
+                    if not relevant_ids:
+                        relevant_ids = beir_relevant_ids
+                    
+                    if relevant_ids:
+                        self.queries.append(SearchQuery(
+                            query=query_text,
+                            relevant_paper_ids=relevant_ids,
+                            category="academic",
+                            difficulty="medium"
+                        ))
+            
+            print(f"✅ Prepared {len(self.queries)} evaluation queries")
+            print(f"   Mapped {len(self.arxiv_to_beir_mapping)} arXiv IDs\n")
+            
+        except ImportError:
+            print("\n⚠️  BEIR library not installed. Installing...")
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "beir"])
+            print("✅ BEIR installed. Please run again.\n")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n❌ Error loading BEIR: {e}")
+            print("   Falling back to manual queries...\n")
+            self.use_beir = False
+    
+    def _build_title_mapping(self):
+        """Build mapping between arXiv IDs and BEIR IDs using titles"""
+        try:
+            from app.services.elasticsearch import ElasticsearchService
+            from app.core.config import settings
+            
+            es_service = ElasticsearchService(settings.elasticsearch_config)
+            
+            # Get sample papers from ES to build mapping
+            for beir_id, beir_doc in list(self.beir_corpus.items())[:1000]:  # Sample for speed
+                beir_title = beir_doc.get('title', '').lower().strip()
+                if not beir_title:
+                    continue
+                
+                # Search ES by title
+                results = es_service.text_search(beir_title, limit=1)
+                if results and len(results) > 0:
+                    arxiv_id = results[0].get('id', '')
+                    if arxiv_id:
+                        self.arxiv_to_beir_mapping[arxiv_id] = beir_id
+        except Exception as e:
+            print(f"   ⚠️  Title mapping failed: {e}")
+            print(f"   ℹ️  Will use BEIR IDs directly for relative evaluation")
+    
+    def load_queries_from_file(self, file_path: str):
+        """Load test queries from JSON file (fallback)"""
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             for item in data['queries']:
@@ -264,9 +361,9 @@ class ASTABenchmark:
         print(f"\n✅ Results saved to: {output_file}")
 
 
-def create_sample_queries() -> ASTABenchmark:
-    """Create comprehensive test queries covering diverse academic search scenarios"""
-    benchmark = ASTABenchmark()
+def create_sample_queries() -> BEIRBenchmark:
+    """Create comprehensive test queries (fallback if BEIR fails)"""
+    benchmark = BEIRBenchmark(use_beir=False)
     
     from app.services.elasticsearch import ElasticsearchService
     from app.core.config import settings
@@ -335,22 +432,34 @@ def create_sample_queries() -> ASTABenchmark:
 
 
 def main():
-    """Run ASTA-bench evaluation"""
-    # Option 1: Load queries from file
-    # benchmark = ASTABenchmark(queries_file='eval/data/asta_queries.json')
+    """Run BEIR SCIDOCS evaluation"""
+    print("="*70)
+    print("📊 BEIR SCIDOCS Benchmark Evaluation")
+    print("="*70)
     
-    # Option 2: Create sample queries
-    benchmark = create_sample_queries()
+    # Use official BEIR dataset
+    benchmark = BEIRBenchmark(dataset_name="scidocs", use_beir=True)
+    
+    # Fallback if BEIR fails
+    if not benchmark.use_beir or len(benchmark.queries) == 0:
+        print("⚠️  Using fallback manual queries...")
+        benchmark = create_sample_queries()
     
     # Run comparison
     results = benchmark.compare_methods()
     
     # Save results
-    benchmark.save_results(results, 'eval/results/asta_benchmark_results.json')
+    output_file = 'eval/results/beir_scidocs_results.json' if benchmark.use_beir else 'eval/results/asta_benchmark_results.json'
+    benchmark.save_results(results, output_file)
     
-    print("\n" + "="*60)
+    print("\n" + "="*70)
     print("🎉 Evaluation Complete!")
-    print("="*60)
+    if benchmark.use_beir:
+        print(f"📊 Official BEIR SCIDOCS: {len(benchmark.queries)} queries")
+        print(f"💾 Results saved to: {output_file}")
+    else:
+        print(f"📊 Fallback mode: {len(benchmark.queries)} queries")
+    print("="*70)
 
 
 if __name__ == "__main__":

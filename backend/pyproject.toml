@@ -35,4 +35,5 @@ dependencies = [
     "langchain-deepseek>=0.1.0",
     "numpy>=1.26.0",
     "matplotlib>=3.8.0",
+    "langchain-google-genai>=4.0.0",
 ]

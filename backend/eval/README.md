@@ -31,11 +31,17 @@ See `EVALUATION_REPORT.md` for detailed results.
 
 ```
 eval/
-├── beir_matched_evaluation.py   # BEIR benchmark with ID mapping
-├── astabench_integration.py     # ASTA-bench solver wrapper
-├── load_qasper.py              # QASPER dataset loader
-├── EVALUATION_REPORT.md        # Evaluation results
-└── data/scidocs/               # BEIR SCIDOCS matched subset
+├── beir_matched_evaluation.py    # BEIR benchmark with ID mapping
+├── beir_retrieval_benchmark.py   # Full BEIR SCIDOCS benchmark
+├── astabench_integration.py      # ASTA-bench solver wrapper
+├── build_id_mapping.py           # ArXiv ID to paper mapping builder
+├── extract_matched_papers.py     # Extract matched subset from corpus
+├── monitor_eval.py               # Evaluation monitoring utility
+├── load_qasper.py                # QASPER dataset loader
+├── EVALUATION_REPORT.md          # Detailed evaluation results
+├── data/scidocs/                 # BEIR SCIDOCS matched subset (gitignored)
+└── results/
+    └── beir_matched_results.json # Benchmark results
 ```
 
 ---

@@ -29,18 +29,12 @@ from app.agent.utils import get_user_query
 # Import orchestrator functions
 from app.agent.orchestrator import (
     orchestrator_intent_analysis,
-    orchestrator_evaluate_papers,
-    orchestrator_route_decision,
-    orchestrator_prepare_qa,
-    should_evaluate_papers,
+    orchestrator_route_decision_entry,
+    orchestrator_route_decision_after_paper_finder,
 )
 
-# Import paper finder functions
-from app.agent.paper_finder import (
-    search_agent,
-    merge_and_rerank,
-    increment_iter,
-)
+# Import paper finder subgraph
+from app.agent.paper_finder import pf_graph
 
 # Import QA subgraph
 from app.agent.qa import qa_graph
@@ -59,7 +53,7 @@ graph_builder = StateGraph(State)
 
 # Add all nodes
 graph_builder.add_node("orchestrator", orchestrator_intent_analysis)
-graph_builder.add_node("search_agent", search_agent)
+graph_builder.add_node("search_agent", pf_graph)
 graph_builder.add_node("tools", ToolNode([
     hybrid_search_papers,
     semantic_search_papers,
@@ -67,10 +61,6 @@ graph_builder.add_node("tools", ToolNode([
     search_papers_by_category,
     vector_search_papers,
 ]))
-graph_builder.add_node("merge_and_rerank", merge_and_rerank)
-graph_builder.add_node("increment_iter", increment_iter)
-graph_builder.add_node("evaluate_papers", orchestrator_evaluate_papers)
-graph_builder.add_node("prepare_qa", orchestrator_prepare_qa)
 graph_builder.add_node("qa_agent", qa_graph)  # QA subgraph
 
 # Entry point: orchestrator analyzes intent
@@ -79,42 +69,23 @@ graph_builder.add_edge(START, "orchestrator")
 # From orchestrator, route based on intent
 graph_builder.add_conditional_edges(
     "orchestrator",
-    orchestrator_route_decision,
+    orchestrator_route_decision_entry,
     {
         "search": "search_agent",
-        "qa": "prepare_qa",
+        "qa": "qa_agent",
+        "refusal": END,
     }
 )
 
-# Search flow: search_agent -> tools -> merge_and_rerank
-graph_builder.add_edge("search_agent", "tools")
-graph_builder.add_edge("tools", "merge_and_rerank")
-
-# After merge_and_rerank, decide whether to evaluate or go to QA
+# After paper finder, decide whether to end or go to QA
 graph_builder.add_conditional_edges(
-    "merge_and_rerank",
-    should_evaluate_papers,
+    "search_agent",
+    orchestrator_route_decision_after_paper_finder,
     {
-        "evaluate": "evaluate_papers",
-        "qa": "prepare_qa",
+        "end": END,              # No QA needed - end here
+        "qa": "qa_agent",      # Papers sufficient - proceed to QA
     }
 )
-
-# After evaluation, route based on sufficiency
-graph_builder.add_conditional_edges(
-    "evaluate_papers",
-    orchestrator_route_decision,
-    {
-        "search": "increment_iter",  # Need more papers - increment and iterate
-        "qa": "prepare_qa",           # Papers sufficient - proceed to QA
-    }
-)
-
-# Iteration loop: increment_iter -> search_agent
-graph_builder.add_edge("increment_iter", "search_agent")
-
-# Prepare QA and then run QA agent
-graph_builder.add_edge("prepare_qa", "qa_agent")
 
 # QA agent goes directly to END
 graph_builder.add_edge("qa_agent", END)

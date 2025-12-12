@@ -34,7 +34,8 @@ orchestrator_model = init_chat_model(
 
 class IntentDecision(BaseModel):
     """Orchestrator intent analysis output."""
-    intent: str = Field(pattern="^(search_then_qa|qa_only|search_only)$")
+    intent: str = Field(
+        pattern="^(search_then_qa|qa_only|search_only|non_cs_query)$")
     reasoning: str
 
 
@@ -62,7 +63,7 @@ def orchestrator_intent_analysis(state: State) -> Dict:
     Analyze user intent and decide the workflow.
 
     Returns:
-        - intent: "search_then_qa", "qa_only", or "search_only"
+        - intent: "search_then_qa", "qa_only", "search_only", or "non_cs_query"
         - optimized_query: If search is needed, optimize the query
         - original_query: Store for reference
     """
@@ -116,6 +117,12 @@ def orchestrator_intent_analysis(state: State) -> Dict:
         "original_query": user_msg,
         "paper_search_iteration": 0
     }
+    print(f"Intent is {intent}", file=sys.stderr)
+
+    # If non-CS query detected, add message and return early
+    if intent == "non_cs_query":
+        updates["messages"] = [AIMessage(content=f"I'm an AI research assistant focused on computer science topics. Your query appears to be outside the computer science domain. I can help you with questions about machine learning, algorithms, software engineering, systems, NLP, computer vision, and other CS topics. Please ask a computer science-related question.")]
+        return updates
 
     # If search is needed, optimize the query
     if intent in ["search_then_qa", "search_only"]:
@@ -153,115 +160,23 @@ def orchestrator_intent_analysis(state: State) -> Dict:
     return updates
 
 
-def orchestrator_evaluate_papers(state: State) -> Dict:
-    """
-    Evaluate if retrieved papers are sufficient to answer the query.
-
-    Returns:
-        - If sufficient: proceed to QA
-        - If insufficient and iterations < 3: refine query and search again
-        - If max iterations reached: proceed with what we have
-    """
-    user_msg = state.get("original_query") or get_user_query(state["messages"])
-    papers = state.get("papers", [])
-    coverage_score = state.get("coverage_score", 0.0)
-    iteration = state.get("paper_search_iteration", 0)
-
-    print(
-        f"Evaluating papers: count={len(papers)}, coverage={coverage_score}, iteration={iteration}", file=sys.stderr)
-
-    # Quick heuristic checks
-    if len(papers) >= 5 and coverage_score >= 0.65:
-        print("Quick check: Sufficient papers found (heuristic)", file=sys.stderr)
-        return {
-            "route": "qa",
-            "messages": [AIMessage(content=f"Found {len(papers)} relevant papers with coverage score {coverage_score:.2f}. Proceeding to answer your question.")]
-        }
-
-    if iteration >= 3:
-        print("Max iterations reached, proceeding with available papers",
-              file=sys.stderr)
-        return {
-            "route": "qa",
-            "messages": [AIMessage(content=f"Searched 3 times. Found {len(papers)} papers. Proceeding with available information.")]
-        }
-
-    # Detailed LLM evaluation
-    eval_prompt = OrchestratorPrompts.format_paper_evaluation(
-        user_msg=user_msg,
-        papers=papers,
-        coverage_score=coverage_score,
-        iteration=iteration
-    )
-
-    eval_model = orchestrator_model.with_structured_output(PaperEvaluation)
-
-    try:
-        eval_result = eval_model.invoke([
-            SystemMessage(content=OrchestratorPrompts.PAPER_EVALUATION_SYSTEM),
-            HumanMessage(content=eval_prompt)
-        ])
-    except Exception as e:
-        print(f"ERROR in paper evaluation: {e}", file=sys.stderr)
-        eval_result = None
-
-    # Handle None or failed response with fallback
-    if eval_result is None or not hasattr(eval_result, 'sufficient'):
-        print("WARNING: Paper evaluation failed, proceeding to QA with available papers", file=sys.stderr)
-        return {
-            "route": "qa",
-            "messages": [AIMessage(content=f"Proceeding with {len(papers)} papers found.")]
-        }
-
-    print(
-        f"Evaluation: sufficient={eval_result.sufficient}, confidence={eval_result.confidence}", file=sys.stderr)
-    print(f"Reasoning: {eval_result.reasoning}", file=sys.stderr)
-
-    if eval_result.sufficient or eval_result.confidence >= 0.6:
-        return {
-            "route": "qa",
-            "messages": [AIMessage(content=f"Retrieved papers are sufficient. {eval_result.reasoning}")]
-        }
-    else:
-        # Need to refine and search again
-        refined_query = eval_result.refined_query or state.get(
-            "optimized_query") or user_msg
-
-        print(
-            f"Papers insufficient. Refining query: {refined_query}", file=sys.stderr)
-        if eval_result.missing_aspects:
-            print(
-                f"Missing aspects: {eval_result.missing_aspects}", file=sys.stderr)
-
-        return {
-            "route": "search",
-            "optimized_query": refined_query,
-            "paper_search_iteration": iteration + 1,
-            "messages": [AIMessage(content=f"Need more papers. Missing: {', '.join(eval_result.missing_aspects or [])}. Refining search...")]
-        }
-
-
-def orchestrator_route_decision(state: State) -> str:
+def orchestrator_route_decision_entry(state: State) -> str:
     """
     Decide the next step based on intent and current state.
 
     Returns:
         - "search": Go to paper finder
         - "qa": Go to QA agent
-        - "evaluate": Evaluate papers after search
+        - "refusal": End due to non-CS query
     """
     intent = state.get("intent")
-    route = state.get("route")
 
-    # If route is explicitly set by evaluation, use it
-    if route:
-        print(f"Using explicit route: {route}", file=sys.stderr)
-        return route
-
-    # Otherwise, decide based on intent
     if intent == "qa_only":
         print("Intent is qa_only, routing to qa", file=sys.stderr)
         return "qa"
+    elif intent == "non_cs_query":
+        print("Intent is non_cs_query, routing to END", file=sys.stderr)
+        return "refusal"
     elif intent in ["search_then_qa", "search_only"]:
         print(f"Intent is {intent}, routing to search", file=sys.stderr)
         return "search"
@@ -271,63 +186,23 @@ def orchestrator_route_decision(state: State) -> str:
         return "search"
 
 
-def orchestrator_prepare_qa(state: State) -> Dict:
+def orchestrator_route_decision_after_paper_finder(state: State) -> str:
     """
-    Prepare state for QA agent.
-
-    If user hasn't selected specific papers, select top papers from search results.
-    """
-    selected_ids = state.get("selected_ids", [])
-    papers = state.get("papers", [])
-    intent = state.get("intent")
-
-    # If QA-only mode and user has selected papers, use them
-    if intent == "qa_only" and selected_ids:
-        print(
-            f"QA mode with {len(selected_ids)} pre-selected papers", file=sys.stderr)
-        return {}
-
-    # If search_then_qa mode, select top papers for QA
-    if intent == "search_then_qa" and papers and not selected_ids:
-        # Select top 5 papers for detailed QA
-        top_papers = papers[:5]
-        selected_ids = [p["arxiv_id"] for p in top_papers]
-
-        print(
-            f"Auto-selecting top {len(selected_ids)} papers for QA", file=sys.stderr)
-
-        return {
-            "selected_ids": selected_ids,
-            "qa_query": state.get("original_query"),
-            "messages": [AIMessage(content=f"Selected top {len(selected_ids)} papers for detailed analysis.")]
-        }
-
-    return {}
-
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def should_evaluate_papers(state: State) -> str:
-    """
-    After paper search, decide if we should evaluate or continue.
+    Decide the next step based on intent and current state.
 
     Returns:
-        - "evaluate": Evaluate papers
-        - "qa": Skip evaluation, go straight to QA
+        - "qa": Go to QA agent
+        - "end": End if no QA needed
     """
     intent = state.get("intent")
 
-    # If search_only, don't evaluate - just return results
     if intent == "search_only":
-        print("Search-only mode, skipping evaluation", file=sys.stderr)
+        print(f"Intent is {intent}, routing to end", file=sys.stderr)
+        return "end"
+    elif intent == "search_then_qa":
+        print(f"Intent is {intent}, routing to qa", file=sys.stderr)
         return "qa"
-
-    # If search_then_qa, evaluate papers
-    if intent == "search_then_qa":
-        print("Search-then-QA mode, evaluating papers", file=sys.stderr)
-        return "evaluate"
-
-    # Default: evaluate
-    return "evaluate"
+    else:
+        # Default to qa
+        print("No clear intent, defaulting to qa", file=sys.stderr)
+        return "qa"

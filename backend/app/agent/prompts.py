@@ -509,6 +509,13 @@ AVAILABLE WORKFLOWS:
    - User asks for recent papers on a topic
    - Example: "Find papers about transformers"
 
+4. "non_cs_query" - Query is not related to computer science
+   Use when:
+   - User asks about topics outside computer science domain
+   - Query is about biology, chemistry, physics, medicine, law, business, etc.
+   - Query is general conversation, chitchat, or unrelated topics
+   - Example: "What are the best restaurants in Paris?" or "How do I bake a cake?"
+
 FEW-SHOT EXAMPLES:
 
 Example 1:
@@ -535,10 +542,22 @@ State: papers=[8 papers about transformers], selected_ids=[], coverage=0.8
 Intent: search_then_qa
 Reasoning: Papers exist but aren't selected for QA; need to use existing papers + search if needed
 
+Example 5:
+Query: "What are the best Italian restaurants in New York?"
+State: papers=[], selected_ids=[]
+Intent: non_cs_query
+Reasoning: Query about restaurants is not related to computer science
+
+Example 6:
+Query: "How do I treat a cold?"
+State: papers=[], selected_ids=[]
+Intent: non_cs_query
+Reasoning: Medical question outside computer science domain
+
 OUTPUT FORMAT:
 Return valid JSON only:
 {
-    "intent": "search_then_qa" | "qa_only" | "search_only",
+    "intent": "search_then_qa" | "qa_only" | "search_only" | "non_cs_query",
     "reasoning": "Brief explanation of why this workflow is optimal"
 }"""
 

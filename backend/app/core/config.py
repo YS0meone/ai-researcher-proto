@@ -39,8 +39,11 @@ class Settings(BaseSettings):
         validate_assignment=True,
         case_sensitive=False
     )
-    LANGSMITH_TRACING: bool
-    LANGSMITH_API_KEY: str
+    # LangSmith configuration (optional)
+    LANGSMITH_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "ai-researcher-proto"
+    
     OPENAI_API_KEY: str
     MODEL_NAME: str
 

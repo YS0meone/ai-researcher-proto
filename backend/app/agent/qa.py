@@ -12,16 +12,15 @@ from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 from app.agent.states import State
-from app.agent.utils import get_user_query
-from app.core.config import settings
+from app.agent.utils import get_user_query, setup_langsmith
+from app.core.config import settings         
 from app.tools.search import vector_search_papers_by_ids_impl
 import logging
 import sys
 
 logger = logging.getLogger(__name__)
-
-qa_model = init_chat_model(model=settings.MODEL_NAME,
-                           api_key=settings.OPENAI_API_KEY)
+setup_langsmith()
+qa_model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 
 # ============================================================================

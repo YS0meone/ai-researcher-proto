@@ -236,10 +236,13 @@ def evaluate_answer(prediction: str, ground_truth: dict) -> dict:
         Dictionary with f1_score and exact_match metrics
     """
     gt_answer = ground_truth.get("ground_truth_answer", "")
+    # Handle non-string ground truth answers
+    if not isinstance(gt_answer, str):
+        gt_answer = str(gt_answer) if gt_answer is not None else ""
     
     f1 = compute_f1(prediction, gt_answer)
     em = compute_exact_match(prediction, gt_answer)
-    
+      
     return {
         "key": "answer_quality",
         "score": f1,  # Primary score for LangSmith

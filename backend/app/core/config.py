@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     LANGCHAIN_PROJECT: str = "ai-researcher-proto"
     
     OPENAI_API_KEY: str
-    MODEL_NAME: str
+    GEMINI_API_KEY: str
+    AGENT_MODEL_NAME: str
+    EVAL_MODEL_NAME: str
 
     DATABASE_URL: str
     DATABASE_ASYNC_URL: str

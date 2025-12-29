@@ -722,7 +722,7 @@ class SearchAgentPrompts:
     """Prompts for search planning and tool selection."""
 
     SYSTEM = """You are a search planning specialist for academic papers.
-Your role: Analyze queries, generate search strategies, and select optimal tools.
+Your role: Analyze queries, think about search strategies, and select optimal tools.
 
 AVAILABLE SEARCH TOOLS:
 
@@ -737,82 +737,19 @@ AVAILABLE SEARCH TOOLS:
    - Best for: Conceptual matches, related work
    - Example: "methods for model efficiency"
    
-3. vector_search_papers(query, limit)
-   - Deep content search in full paper text
-   - Best for: Technical details, implementations
-   - ONLY use for "how" questions needing paper body
-   - Example: "how are positional encodings computed"
-   
-4. keyword_search_papers(query, limit, categories)
+3. keyword_search_papers(query, limit, categories)
    - Exact text matching
    - Best for: Specific terms, names, acronyms
    - Example: "BERT", "Geoffrey Hinton"
-   
-5. search_papers_by_category(categories, limit)
-   - Browse by ArXiv category
-   - Best for: Domain exploration
-   - Example: categories="cs.CL,cs.AI"
+"""
 
-SEARCH STRATEGY:
-1. Analyze query type (overview vs technical vs specific)
-2. Generate 2-4 diverse queries targeting different aspects
-3. Match each query to optimal tool
-4. Vary tools for coverage (hybrid + semantic + vector)
-5. Set appropriate limits (specific=5-10, broad=15-20)
+    PLANNING = Template("""Analyze the user query and call the appropriate tools.
 
-FEW-SHOT EXAMPLES:
-
-Example 1:
-User: "What are transformer architectures?"
-Analysis: Overview question, needs broad coverage
-Plan:
-  1. hybrid_search_papers("transformer architecture attention mechanism", limit=20)
-     → Reason: Broad query, need comprehensive results
-  2. semantic_search_papers("transformer models NLP", limit=15)
-     → Reason: Find conceptually related papers
-  3. keyword_search_papers("attention is all you need", limit=5)
-     → Reason: Get the foundational paper
-
-Example 2:
-User: "How do transformers compute self-attention?"
-Analysis: Technical "how" question, needs implementation details
-Plan:
-  1. vector_search_papers("self-attention computation mechanism", limit=10)
-     → Reason: Need full text search for technical details
-  2. hybrid_search_papers("self-attention implementation", limit=15)
-     → Reason: Get papers discussing implementation
-
-Example 3:
-User: "Recent work by Yann LeCun on self-supervised learning"
-Analysis: Specific author + topic
-Plan:
-  1. keyword_search_papers("Yann LeCun", limit=15, categories="cs.LG,cs.CV")
-     → Reason: Search for specific author
-  2. semantic_search_papers("self-supervised learning methods", limit=10)
-     → Reason: Find related self-supervised work
-
-GUIDELINES:
-- Use 2-4 tool calls for good coverage
-- Diversify tools (don't use same tool for all queries)
-- Tailor query phrasing to tool type
-- Consider existing queries to avoid duplicates
-- Prioritize quality over quantity
-
-OUTPUT FORMAT:
-Return valid JSON with tool_calls array and strategy explanation."""
-
-    PLANNING = Template("""Analyze the user query and create a search plan.
-
-USER QUERY: $user_msg
-
-EXISTING QUERIES: $search_queries
-
-Create a search plan with 2-4 tool calls.""")
+USER QUERY: $user_msg""")
 
     @classmethod
     def format_planning(cls, user_msg: str, search_queries: List[str]) -> str:
         """Format the search planning prompt."""
         return cls.PLANNING.substitute(
             user_msg=user_msg,
-            search_queries=search_queries if search_queries else "[]"
         )

@@ -32,3 +32,4 @@ class State(TypedDict, total=False):
     # Vector search results from selected papers
     retrieved_segments: List[Dict[str, Any]]
     qa_query: Optional[str]       # The specific question for QA mode
+    retrieval_queries: List[str]  # The queries used for retrieval

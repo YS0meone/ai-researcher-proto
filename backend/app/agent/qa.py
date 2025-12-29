@@ -14,13 +14,13 @@ from pydantic import BaseModel, Field
 from app.agent.states import State
 from app.agent.utils import get_user_query, setup_langsmith
 from app.core.config import settings         
-from app.tools.search import vector_search_papers_by_ids_impl
+from app.tools.search import vector_search_papers_by_ids_impl, get_paper_abstract
 import logging
 import sys
 
 logger = logging.getLogger(__name__)
 setup_langsmith()
-qa_model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+qa_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 
 # ============================================================================
@@ -95,7 +95,7 @@ ANSWER GUIDELINES:
 - Cite sources as [Paper: arxiv_id, Section: "quoted text..."]
 - If evidence is insufficient, clearly state what's missing
 - For technical questions, include specific details (numbers, formulas, etc.)
-- Be concise but complete
+- Be as concise as possible but complete
 
 CITATION FORMAT:
 - For direct quotes: "The model achieves 95% accuracy" [Paper: 1234.56789]
@@ -182,12 +182,24 @@ def qa_retrieve(state: State) -> Dict:
             "messages": [AIMessage(content="No papers have been selected for Q&A. Please select papers first or use the paper finding mode.")]
         }
 
+    # Fetch abstracts for selected papers
+    abstracts = get_paper_abstract(selected_ids)
+    
+    # Format abstracts for the prompt
+    abstracts_text = "\n".join([
+        f"Paper {paper_id}:\n{abstract}"
+        for paper_id, abstract in abstracts.items()
+    ])
+    
     # Generate focused retrieval queries
     retrieval_prompt = f"""User question: {user_msg}
 
 Selected papers to search: {selected_ids}
 
-Generate 1-3 focused search queries to find relevant evidence for this question."""
+Paper abstracts:
+{abstracts_text}
+
+Generate 1-3 focused search queries to find relevant evidence for this question based on the user question and the paper abstracts."""
 
     structured_model = qa_model.with_structured_output(RetrievalPlan)
     plan = structured_model.invoke([
@@ -235,7 +247,8 @@ Generate 1-3 focused search queries to find relevant evidence for this question.
 
     return {
         "retrieved_segments": top_segments,
-        "qa_query": user_msg
+        "qa_query": user_msg,
+        "retrieval_queries": plan.search_queries
     }
 
 
@@ -273,6 +286,7 @@ Would you like me to:
         formatted_segments.append(f"""
 [Segment {i}]
 Paper: {seg.get('title', 'Unknown')} (arXiv:{seg.get('arxiv_id', 'unknown')})
+Abstract: {seg.get('abstract', 'No abstract')}
 Relevance Score: {seg.get('similarity_score', 0):.3f}
 Content: {seg.get('supporting_detail', 'No content')}
 """)
@@ -284,7 +298,7 @@ Content: {seg.get('supporting_detail', 'No content')}
 Retrieved evidence from selected papers:
 {segments_text}
 
-Provide a comprehensive answer grounded in this evidence. Cite sources for all claims."""
+Provide a conscise and accurate answer to the user's questions based on the retrieved evidence and abstracts. If the question is unclear Cite sources for all claims."""
 
     # Generate answer
     response = qa_model.invoke([

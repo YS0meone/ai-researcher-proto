@@ -380,10 +380,10 @@ def qa_e2e_evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> di
 
 def retrieval_evaluator(outputs: dict, reference_outputs: dict) -> float:
     retrieved_segments = outputs["metadata"]["retrieved_segments"]
-    ground_truth_evidence = [seg.strip("[]' ")[:100] for seg in reference_outputs["ground_truth_evidence"].split("\n")]
+    ground_truth_evidence = reference_outputs["ground_truth_evidence"]
     hit = 0
     for retrieved_segment in retrieved_segments:
-        if retrieved_segment[:100] in ground_truth_evidence:
+        if retrieved_segment in ground_truth_evidence:
             hit += 1
     return hit / len(ground_truth_evidence) if len(ground_truth_evidence) > 0 else 0.0
 
@@ -391,13 +391,13 @@ def main():
     """Run QASPER evaluation."""
     print("Starting QASPER evaluation...")
     print(f"Dataset: {dataset_name}")
-    client = Client()
-    dataset = client.read_dataset(dataset_name=dataset_name)
+    # client = Client()
+    # dataset = client.read_dataset(dataset_name=dataset_name)
     results = evaluate(
         qa_agent_wrapper,
-        data=client.list_examples(dataset_id=dataset.id, splits=["test"]),
+        data=dataset_name,
         evaluators=[qa_e2e_evaluator, retrieval_evaluator],
-        max_concurrency=1,  # Avoid rate limits and ensure reproducibility
+        max_concurrency=8,
     )
 
 

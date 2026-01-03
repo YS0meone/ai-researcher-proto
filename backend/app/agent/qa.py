@@ -10,125 +10,45 @@ This module implements:
 from typing import Dict, List, Any, Optional
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import ToolMessage
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 from app.agent.states import State
 from app.agent.utils import get_user_query, setup_langsmith
 from app.core.config import settings         
-from app.tools.search import vector_search_papers_by_ids_impl, get_paper_abstract
+from app.tools.search import vector_search_papers_by_ids, get_paper_abstract
 import logging
 import sys
+import json
 
 logger = logging.getLogger(__name__)
 setup_langsmith()
 qa_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
-
-# ============================================================================
-# STRUCTURED OUTPUT MODELS
-# ============================================================================
-
-class RetrievalPlan(BaseModel):
-    """Structured output for retrieval planning."""
-    search_queries: List[str] = Field(
-        min_length=1,
-        max_length=3,
-        description="1-3 focused queries to find relevant evidence"
-    )
+class RetrievalDecision(BaseModel):
+    """Structured output for retrieval decision."""
     reasoning: str = Field(
-        description="Why these queries will find relevant evidence")
+        description="The reasoning for the decision")
+    should_answer: bool = Field(
+        description="Whether the current evidence is sufficient to answer the user's question")
+    search_queries: List[str] = Field(
+        description="The search queries to be executed")
 
+QA_RETRIEVAL_SYSTEM = """You are an expert in evidence retrieval for academic paper QA.
+You role is to determine whether the current evidence is sufficient to answer the user's question or we need to retrieve more evidence.
 
-class AnswerQuality(BaseModel):
-    """Structured output for answer quality assessment."""
-    is_sufficient: bool = Field(
-        description="Whether evidence is sufficient to answer")
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Confidence in the answer")
-    missing_info: Optional[str] = Field(
-        default=None, description="What info is missing if insufficient")
-    refined_query: Optional[str] = Field(
-        default=None, description="Refined query if more evidence needed")
+General Strategy:
+- You should think step by step and reason about the user's query and the evidence.
 
+Routing Strategy:
+- You decision should be based on the following context: the user's query, the paper abstracts, the retrieved evidence and the past reasoning.  
+- You should only decide to answer the user when you completely understand the user's query and the evidence is sufficient to answer the question or you are certain that the database does not contain any information that could answer the question.
 
-# ============================================================================
-# QA PROMPTS
-# ============================================================================
+Retrieval Strategy:
+- If the evidence is insufficient, you should generate 1-3 focused search queries to find relevant evidence within specific papers.
+- You should always understand the user's query first. If you are not sure about certain concept you should generate search queries to help you understand the user's query better.
+"""
 
-QA_RETRIEVAL_SYSTEM = """You are a retrieval specialist for academic paper QA.
-Your role: Generate focused search queries to find relevant evidence within specific papers.
-
-CONTEXT:
-- User has selected specific papers to ask questions about
-- You must search within ONLY these papers using vector search
-- Goal: Find the most relevant segments to answer the user's question
-
-QUERY GENERATION STRATEGY:
-1. Analyze the question - What specific information is needed?
-2. Extract key concepts - Technical terms, methods, concepts mentioned
-3. Create focused queries - Target the specific information needed
-4. Consider variations - Different phrasings that might match paper content
-
-GOOD QUERIES:
-- Technical and specific: "attention mechanism computation formula"
-- Method-focused: "training procedure hyperparameters"
-- Result-focused: "experimental results accuracy benchmark"
-
-BAD QUERIES:
-- Too broad: "transformer" (won't find specific info)
-- Too narrow: exact phrases that may not match
-- Off-topic: queries about things not in the papers
-
-OUTPUT: Generate 1-3 focused search queries."""
-
-QA_ANSWER_SYSTEM = """You are an expert academic QA assistant.
-Your role: Answer questions about research papers using retrieved evidence.
-
-CHAIN OF THOUGHT:
-1. Review the question and retrieved evidence segments
-2. Identify which segments directly address the question
-3. Synthesize information from multiple segments if needed
-4. Formulate a clear, accurate answer with citations
-5. Note any limitations or missing information
-
-ANSWER GUIDELINES:
-- Ground EVERY claim in the retrieved evidence
-- Cite sources as [Paper: arxiv_id, Section: "quoted text..."]
-- If evidence is insufficient, clearly state what's missing
-- For technical questions, include specific details (numbers, formulas, etc.)
-- Be as concise as possible but complete
-
-CITATION FORMAT:
-- For direct quotes: "The model achieves 95% accuracy" [Paper: 1234.56789]
-- For paraphrased info: According to [Paper: 1234.56789], the approach uses...
-- For multiple sources: This finding is supported by [Paper: 1234.56789, Paper: 9876.54321]
-
-HANDLING INSUFFICIENT EVIDENCE:
-- If no relevant evidence found: "I couldn't find information about X in the selected papers."
-- If partial evidence: "Based on available evidence... However, more details about Y would be needed."
-- If conflicting evidence: Present both perspectives with citations."""
-
-QA_QUALITY_SYSTEM = """You are a QA quality assessor.
-Your role: Evaluate if the retrieved evidence is sufficient to answer the question.
-
-ASSESSMENT CRITERIA:
-1. Relevance - Do segments actually address the question?
-2. Completeness - Is enough information available?
-3. Specificity - Are technical details present if needed?
-4. Clarity - Is the evidence clear enough to formulate an answer?
-
-CONFIDENCE CALIBRATION:
-- 0.9-1.0: Evidence directly answers the question with specific details
-- 0.7-0.8: Good evidence but some minor gaps
-- 0.5-0.6: Partial evidence, can give general answer
-- 0.3-0.4: Weak evidence, significant gaps
-- 0.0-0.2: No relevant evidence found
-
-OUTPUT: Assess if evidence is sufficient and suggest refinements if needed."""
-
-
-# ============================================================================
-# QA AGENT NODES
-# ============================================================================
 
 def qa_prepare(state: State) -> Dict:
     """
@@ -142,7 +62,7 @@ def qa_prepare(state: State) -> Dict:
     if intent == "qa_only" and selected_ids:
         print(
             f"QA mode with {len(selected_ids)} pre-selected papers", file=sys.stderr)
-        return {}
+        return {"sufficient_evidence": False}
 
     # If search_then_qa mode, select top papers for QA
     if intent == "search_then_qa" and papers and not selected_ids:
@@ -156,10 +76,11 @@ def qa_prepare(state: State) -> Dict:
         return {
             "selected_ids": selected_ids,
             "qa_query": state.get("original_query"),
-            "messages": [AIMessage(content=f"Selected top {len(selected_ids)} papers for detailed analysis.")]
+            "messages": [AIMessage(content=f"Selected top {len(selected_ids)} papers for detailed analysis.")],
+            "sufficient_evidence": False
         }
 
-    return {}
+    return {"sufficient_evidence": False}
 
 
 def qa_retrieve(state: State) -> Dict:
@@ -172,9 +93,6 @@ def qa_retrieve(state: State) -> Dict:
     user_msg = get_user_query(state["messages"])
     selected_ids = state.get("selected_ids", [])
 
-    print(
-        f"QA Retrieve: query='{user_msg[:50]}...', selected_ids={selected_ids}", file=sys.stderr)
-
     if not selected_ids:
         print("WARNING: No papers selected for QA!", file=sys.stderr)
         return {
@@ -182,16 +100,17 @@ def qa_retrieve(state: State) -> Dict:
             "messages": [AIMessage(content="No papers have been selected for Q&A. Please select papers first or use the paper finding mode.")]
         }
 
-    # Fetch abstracts for selected papers
     abstracts = get_paper_abstract(selected_ids)
-    
-    # Format abstracts for the prompt
+    segments = state.get("retrieved_segments", [])
+    segments_text = "\n".join(segments)
+    past_summaries = state.get("summaries", [])
+    past_summaries_text = "\n".join(past_summaries)
+
     abstracts_text = "\n".join([
         f"Paper {paper_id}:\n{abstract}"
         for paper_id, abstract in abstracts.items()
     ])
     
-    # Generate focused retrieval queries
     retrieval_prompt = f"""User question: {user_msg}
 
 Selected papers to search: {selected_ids}
@@ -199,237 +118,193 @@ Selected papers to search: {selected_ids}
 Paper abstracts:
 {abstracts_text}
 
-Generate 1-3 focused search queries to find relevant evidence for this question based on the user question and the paper abstracts."""
+Past summaries:
+{past_summaries_text}
 
-    structured_model = qa_model.with_structured_output(RetrievalPlan)
+Retrieved evidence:
+{segments_text}"""
+
+    structured_model = qa_model.with_structured_output(RetrievalDecision)
     plan = structured_model.invoke([
         SystemMessage(content=QA_RETRIEVAL_SYSTEM),
         HumanMessage(content=retrieval_prompt)
     ])
 
-    print(
-        f"Retrieval plan: {plan.search_queries} - {plan.reasoning}", file=sys.stderr)
-
-    # Execute vector searches within selected papers
-    all_segments: List[Dict[str, Any]] = []
-    seen_content = set()  # Deduplicate by content
-
-    for query in plan.search_queries:
-        try:
-            results = vector_search_papers_by_ids_impl(
-                query=query,
-                ids=selected_ids,
-                limit=5,
-                score_threshold=0.5
-            )
-
-            # Add unique results
-            for segment in results:
-                if "error" not in segment:
-                    content_key = segment.get("supporting_detail", "")[:100]
-                    if content_key and content_key not in seen_content:
-                        seen_content.add(content_key)
-                        segment["retrieval_query"] = query
-                        all_segments.append(segment)
-
-        except Exception as e:
-            print(
-                f"Vector search failed for query '{query}': {e}", file=sys.stderr)
-
-    # Sort by similarity score
-    all_segments.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
-
-    # Keep top 10 segments
-    top_segments = all_segments[:10]
-
-    print(
-        f"Retrieved {len(top_segments)} unique segments from {len(selected_ids)} papers", file=sys.stderr)
+    if plan.should_answer:
+        return {
+            "messages": [AIMessage(content=plan.reasoning)],
+            "sufficient_evidence": True
+        }
+    
+    tool_model = qa_model.bind_tools([vector_search_papers_by_ids])
+    response = tool_model.invoke([
+        SystemMessage(content="Create vector search tool calls based on the search queries"),
+        HumanMessage(content=f"Search queries: {plan.search_queries}, Selected papers: {selected_ids}")
+    ])
 
     return {
-        "retrieved_segments": top_segments,
-        "qa_query": user_msg,
-        "retrieval_queries": plan.search_queries
+        "messages": [response],
+        "sufficient_evidence": False
     }
 
+def qa_rerank(state: State) -> Dict:
+    """
+    Extract tool results and rerank segments based on relevance.
+    Uses LLM to evaluate which segments are most relevant to the user's query.
+    """
+    messages = state.get("messages", [])
+    user_msg = get_user_query(messages)
+    selected_ids = state.get("selected_ids", [])
+    
+    # Extract tool call results from the last tool messages
+    new_segments = []
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            # Tool message content is a JSON string of search results
+            content = msg.content
+            try:
+                if isinstance(content, str):
+                    parsed = json.loads(content)
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in new_segments:
+                                new_segments.append(item["supporting_detail"])
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in new_segments:
+                            new_segments.append(item["supporting_detail"])
+            except json.JSONDecodeError:
+                # If not JSON, append as is
+                new_segments.append(content)
+        elif hasattr(msg, 'tool_calls') and msg.tool_calls:
+            # Stop when we hit the tool call request
+            break
+    
+    if not new_segments:
+        return {"messages": [AIMessage(content="No new segments found. Please try again.")]}
+    # Get context for reranking
+    abstracts = get_paper_abstract(selected_ids)
+    abstracts_text = "\n".join([
+        f"Paper {paper_id}:\n{abstract}"
+        for paper_id, abstract in abstracts.items()
+    ])
+    
+    past_summaries = state.get("summaries", [])
+    past_summaries_text = "\n".join(past_summaries)
+    
+    new_segments_text = "\n".join([f"Segment {i}:\n{segment}" for i, segment in enumerate(new_segments)])
+    
+    rerank_system = """You are an expert in evaluating the relevance of retrieved evidence for answering a research question.
+    Your would be presented with a user question, paper abstracts, past summaries and new retrieved segments.
+    The user question is usually a research question about several selected papers and the paper abstracts are the ones of the selected papers.
+    The system have retrieved evidence to answer the user question or to help you understand the user question better.
+    The past summaries are the summaries of the system about the user question and the retrieved evidence.
+
+    Goal:
+    - You need to select the index of the segements that can help you answer the user question, and order them by their relevance to the user question.
+    - You need to summarize the information you learned from the segments that are helpful to answer the user question.
+
+    General Strategy:
+    - You should think in step by step manner.
+    - The selected segments should only be the ones that are the direct evidence to answer the user question.
+    - For selected segements, you should only generate the selected index of the segments. The index is present at the beginning of the segment text in format of "Segment x:" where x is the index of the segment.
+    - The summary you generate should be covering the useful information you learned from the segements and help the system to generate a better search query or answer the user question.
+    - You should not select any segment that is not directly related to the user question, it's ok you don't select any segment.
+    - You should output the selected index of the segments in the order of their relevance to the user question.
+
+    Tips:
+    - The retrieved segments may not be directly related to the user question, but they may help you understand the user question better and generate better search queries.
+    - For the segments that are not directly related to the user question, you should summarize the information you learned from them and don't select them in the final output.
+    - Some segments may be very short and don't contain any useful information, you should not select them."""
+
+    # Use LLM to evaluate and extract reasoning about relevance
+    rerank_prompt = f"""User question: {user_msg}
+
+Paper abstracts:
+{abstracts_text}
+Past Summaries:
+{past_summaries_text}
+
+New retrieved segments:
+{new_segments_text}
+
+Select the relevant segments and generate a summary of the information you learned from them."""
+
+    class BatchRerankResult(BaseModel):
+        selected_idx: List[int] = Field(description="The index of the selected segments")
+        summary: str = Field(description="The summary of the selected segments")
+
+    structured_model = qa_model.with_structured_output(BatchRerankResult)
+    response = structured_model.invoke([
+        SystemMessage(content=rerank_system),
+        HumanMessage(content=rerank_prompt)
+    ])
+
+    existing_segments = state.get("retrieved_segments", [])
+    selected_segments = [new_segments[i] for i in response.selected_idx if new_segments[i] not in existing_segments]
+    # Store the new segments and reasoning
+    existing_summaries = state.get("summaries", [])
+    qa_iteration = state.get("qa_iteration", 0) + 1
+    
+    return {
+        "retrieved_segments": existing_segments + selected_segments,
+        "summaries": existing_summaries + [response.summary],
+        "qa_iteration": qa_iteration
+    }
 
 def qa_answer(state: State) -> Dict:
     """
-    Generate an answer based on retrieved segments.
-
-    Uses the retrieved_segments to formulate a grounded answer to the user's question.
-    Cites sources and acknowledges any gaps in the evidence.
+    Generate a final answer based on retrieved segments and reasoning.
+    Combines all evidence and provides a concise yet complete response.
     """
-    user_msg = state.get("qa_query") or get_user_query(state["messages"])
-    segments = state.get("retrieved_segments", [])
+    messages = state.get("messages", [])
+    user_msg = get_user_query(messages)
     selected_ids = state.get("selected_ids", [])
-
-    print(
-        f"QA Answer: query='{user_msg[:50]}...', segments={len(segments)}", file=sys.stderr)
-
-    if not segments:
-        return {
-            "messages": [AIMessage(content=f"""I searched the selected papers ({', '.join(selected_ids)}) but couldn't find relevant information to answer your question.
-
-This could mean:
-1. The papers don't contain information about this specific topic
-2. The question requires details not present in the paper segments indexed
-3. The papers might discuss this topic using different terminology
-
-Would you like me to:
-- Try a different phrasing of your question?
-- Search for different papers that might cover this topic?""")]
-        }
-
-    # Format segments for the prompt
-    formatted_segments = []
-    for i, seg in enumerate(segments, 1):
-        formatted_segments.append(f"""
-[Segment {i}]
-Paper: {seg.get('title', 'Unknown')} (arXiv:{seg.get('arxiv_id', 'unknown')})
-Abstract: {seg.get('abstract', 'No abstract')}
-Relevance Score: {seg.get('similarity_score', 0):.3f}
-Content: {seg.get('supporting_detail', 'No content')}
-""")
-
-    segments_text = "\n".join(formatted_segments)
-
+    
+    # Get all accumulated evidence
+    segments = state.get("retrieved_segments", [])
+    segments_text = "\n\n".join(segments) if segments else "No evidence retrieved."
+    
+    summaries = state.get("summaries", [])
+    summaries_text = "\n\n".join(summaries) if summaries else "No analysis available."
+    
+    # Get paper abstracts for context
+    abstracts = get_paper_abstract(selected_ids)
+    abstracts_text = "\n".join([
+        f"Paper {paper_id}:\n{abstract}"
+        for paper_id, abstract in abstracts.items()
+    ])
+    
     answer_prompt = f"""User question: {user_msg}
 
-Retrieved evidence from selected papers:
+Paper abstracts:
+{abstracts_text}
+
+Summaries:
+{summaries_text}
+
+Retrieved evidence:
 {segments_text}
 
-Provide a conscise and accurate answer to the user's questions based on the retrieved evidence and abstracts. If the question is unclear Cite sources for all claims."""
+Based on the above evidence and analysis, provide a concise yet complete answer to the user's question. If the evidence is insufficient, acknowledge the limitations."""
 
-    # Generate answer
     response = qa_model.invoke([
-        SystemMessage(content=QA_ANSWER_SYSTEM),
-        *state.get("messages", []),
+        SystemMessage(content="You are an expert research assistant. Provide accurate, well-grounded answers based on the evidence provided. Cite specific findings from the papers when relevant."),
         HumanMessage(content=answer_prompt)
     ])
+    
+    return {
+        "messages": [AIMessage(content=response.content)]
+    }
 
-    return {"messages": [response]}
-
-
-def qa_assess_quality(state: State) -> str:
-    """
-    Assess if retrieved evidence is sufficient.
-
-    Returns:
-        - "answer" if evidence is sufficient
-        - "refine" if more evidence needed
-        - "insufficient" if no relevant evidence found
-    """
-    segments = state.get("retrieved_segments", [])
-    user_msg = state.get("qa_query") or get_user_query(state["messages"])
-
-    if not segments:
-        return "insufficient"
-
-    # Quick heuristic: if we have high-quality segments, proceed to answer
-    high_quality = [s for s in segments if s.get("similarity_score", 0) > 0.7]
-
-    if len(high_quality) >= 2:
-        print(
-            f"Quality check: {len(high_quality)} high-quality segments found, proceeding to answer", file=sys.stderr)
+def should_answer(state: State) -> str:
+    if state.get("sufficient_evidence", False):
         return "answer"
-
-    if len(segments) >= 3:
-        print(
-            f"Quality check: {len(segments)} segments found, proceeding to answer", file=sys.stderr)
+    elif state.get("qa_iteration", 0) >= 3:
         return "answer"
+    else:
+        return "tools"
 
-    # More nuanced check with LLM
-    assessment_prompt = f"""User question: {user_msg}
-
-Retrieved segments: {len(segments)}
-Top segment score: {segments[0].get('similarity_score', 0) if segments else 0}
-Top segment preview: {segments[0].get('supporting_detail', '')[:200] if segments else 'None'}
-
-Is this evidence sufficient to answer the question?"""
-
-    try:
-        structured_model = qa_model.with_structured_output(AnswerQuality)
-        quality = structured_model.invoke([
-            SystemMessage(content=QA_QUALITY_SYSTEM),
-            HumanMessage(content=assessment_prompt)
-        ])
-
-        if quality.is_sufficient or quality.confidence > 0.5:
-            return "answer"
-        elif quality.refined_query:
-            return "refine"
-        else:
-            return "insufficient"
-    except Exception as e:
-        print(
-            f"Quality assessment failed: {e}, defaulting to answer", file=sys.stderr)
-        return "answer"
-
-
-def qa_refine_retrieval(state: State) -> Dict:
-    """
-    Refine retrieval with alternative queries when initial results are insufficient.
-    """
-    user_msg = state.get("qa_query") or get_user_query(state["messages"])
-    selected_ids = state.get("selected_ids", [])
-    previous_segments = state.get("retrieved_segments", [])
-
-    print(f"Refining retrieval for: {user_msg[:50]}...", file=sys.stderr)
-
-    # Generate alternative queries
-    refine_prompt = f"""The initial search didn't find sufficient evidence.
-
-Original question: {user_msg}
-Previous results: {len(previous_segments)} segments found
-Selected papers: {selected_ids}
-
-Generate 2-3 ALTERNATIVE search queries using different terms or phrasings."""
-
-    structured_model = qa_model.with_structured_output(RetrievalPlan)
-    plan = structured_model.invoke([
-        SystemMessage(content=QA_RETRIEVAL_SYSTEM),
-        HumanMessage(content=refine_prompt)
-    ])
-
-    # Execute refined searches
-    new_segments: List[Dict[str, Any]] = []
-    seen_content = set(seg.get("supporting_detail", "")[
-                       :100] for seg in previous_segments)
-
-    for query in plan.search_queries:
-        try:
-            results = vector_search_papers_by_ids_impl(
-                query=query,
-                ids=selected_ids,
-                limit=5,
-                score_threshold=0.4  # Lower threshold for refinement
-            )
-
-            for segment in results:
-                if "error" not in segment:
-                    content_key = segment.get("supporting_detail", "")[:100]
-                    if content_key and content_key not in seen_content:
-                        seen_content.add(content_key)
-                        segment["retrieval_query"] = query
-                        new_segments.append(segment)
-
-        except Exception as e:
-            print(
-                f"Refined search failed for query '{query}': {e}", file=sys.stderr)
-
-    # Merge with previous segments
-    all_segments = previous_segments + new_segments
-    all_segments.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
-
-    print(
-        f"After refinement: {len(all_segments)} total segments", file=sys.stderr)
-
-    return {"retrieved_segments": all_segments[:10]}
-
-
-# ============================================================================
-# QA SUBGRAPH BUILDER
-# ============================================================================
 
 def build_qa_graph():
     """
@@ -449,28 +324,19 @@ def build_qa_graph():
     # Add nodes
     qa_builder.add_node("qa_prepare", qa_prepare)
     qa_builder.add_node("qa_retrieve", qa_retrieve)
-    qa_builder.add_node("qa_assess", lambda s: s)  # Dummy node for conditional
-    qa_builder.add_node("qa_refine", qa_refine_retrieval)
+    qa_builder.add_node("tools", ToolNode([vector_search_papers_by_ids]))
+    qa_builder.add_node("qa_rerank", qa_rerank)
     qa_builder.add_node("qa_answer", qa_answer)
 
     # Add edges
     qa_builder.set_entry_point("qa_prepare")
     qa_builder.add_edge("qa_prepare", "qa_retrieve")
-    qa_builder.add_edge("qa_retrieve", "qa_assess")
-
-    # Conditional: assess quality and decide next step
-    qa_builder.add_conditional_edges(
-        "qa_assess",
-        qa_assess_quality,
-        {
-            "answer": "qa_answer",
-            "refine": "qa_refine",
-            "insufficient": "qa_answer"  # Still try to answer with available info
-        }
-    )
-
-    # After refine, always answer
-    qa_builder.add_edge("qa_refine", "qa_answer")
+    qa_builder.add_conditional_edges("qa_retrieve", should_answer, {
+        "answer": "qa_answer",
+        "tools": "tools",
+    })
+    qa_builder.add_edge("tools", "qa_rerank")
+    qa_builder.add_edge("qa_rerank", "qa_retrieve")
     qa_builder.add_edge("qa_answer", END)
 
     return qa_builder.compile()

@@ -324,10 +324,8 @@ def qa_agent_wrapper(dataset_input: dict) -> dict:
     answer = result_state["messages"][-1].content if result_state.get("messages") else "No answer generated"
     
     # Extract retrieved segments for evidence recall
-    retrieved_segments = [
-        seg.get("supporting_detail", "") 
-        for seg in result_state.get("retrieved_segments", [])
-    ]
+    # Note: retrieved_segments is now a List[str] (raw tool outputs), not List[Dict]
+    retrieved_segments = result_state.get("retrieved_segments", [])
     
     return {
         "answer": answer,
@@ -382,8 +380,8 @@ def retrieval_evaluator(outputs: dict, reference_outputs: dict) -> float:
     retrieved_segments = outputs["metadata"]["retrieved_segments"]
     ground_truth_evidence = reference_outputs["ground_truth_evidence"]
     hit = 0
-    for retrieved_segment in retrieved_segments:
-        if retrieved_segment in ground_truth_evidence:
+    for gt in ground_truth_evidence:
+        if gt in retrieved_segments:
             hit += 1
     return hit / len(ground_truth_evidence) if len(ground_truth_evidence) > 0 else 0.0
 
@@ -391,13 +389,13 @@ def main():
     """Run QASPER evaluation."""
     print("Starting QASPER evaluation...")
     print(f"Dataset: {dataset_name}")
-    # client = Client()
-    # dataset = client.read_dataset(dataset_name=dataset_name)
+    client = Client()
+    dataset = client.read_dataset(dataset_name=dataset_name)
     results = evaluate(
         qa_agent_wrapper,
-        data=dataset_name,
+        data=client.list_examples(dataset_id=dataset.id),
         evaluators=[qa_e2e_evaluator, retrieval_evaluator],
-        max_concurrency=8,
+        max_concurrency=10,
     )
 
 

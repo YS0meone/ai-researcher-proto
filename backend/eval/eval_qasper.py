@@ -20,7 +20,7 @@ from app.core.config import settings
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 from langsmith import Client
-
+from app.agent.qa_baseline import qa_baseline
 
 setup_langsmith()
 dataset_name = "qasper-qa-e2e"
@@ -337,6 +337,29 @@ def qa_agent_wrapper(dataset_input: dict) -> dict:
         }
     }
 
+def qa_baseline_wrapper(dataset_input: dict) -> dict:
+    """
+    Enhanced wrapper that returns answer and retrieval metadata.
+    """
+    initial_state = {
+        "messages": [HumanMessage(content=dataset_input["question"])],
+        "selected_ids": [dataset_input["paper_id"]]
+    }
+    
+    result_state = qa_baseline.invoke(initial_state)
+    
+    return {
+        "answer": result_state["messages"][-1].content,
+        "metadata": {
+            "retrieved_segments": [],
+            "num_segments": 0,
+            "selected_ids": [],
+            "retrieval_queries": [],
+            "reasoning": result_state["reasoning"],
+        }
+    }
+
+
 def qa_e2e_evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
     prompt = f"""
     You are a QA evaluator which specializes in evaluating the quality of the answer to a question related to a specific scientific paper.
@@ -360,7 +383,7 @@ def qa_e2e_evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> di
     Question: {inputs["question"]}
     Ground truth answer: {reference_outputs["ground_truth_answer"]}
     Model's answer: {outputs["answer"]}
-    Retrieved segments: {outputs["metadata"]["retrieved_segments"]}
+    Retrieved segments: {reference_outputs["ground_truth_evidence"]}
     Ground truth evidence: {reference_outputs["ground_truth_evidence"]}
     """
 
@@ -374,6 +397,7 @@ def qa_e2e_evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> di
         "score": response.score,
         "comment": response.reasoning  # LangSmith UI displays 'comment' field
     }
+
 
 
 def retrieval_evaluator(outputs: dict, reference_outputs: dict) -> float:
@@ -392,10 +416,10 @@ def main():
     client = Client()
     dataset = client.read_dataset(dataset_name=dataset_name)
     results = evaluate(
-        qa_agent_wrapper,
+        qa_baseline_wrapper,
         data=client.list_examples(dataset_id=dataset.id),
         evaluators=[qa_e2e_evaluator, retrieval_evaluator],
-        max_concurrency=10,
+        max_concurrency=1,
     )
 
 

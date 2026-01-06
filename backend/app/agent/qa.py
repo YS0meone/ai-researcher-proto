@@ -35,13 +35,19 @@ class RetrievalDecision(BaseModel):
         description="The search queries to be executed")
 
 QA_RETRIEVAL_SYSTEM = """You are an expert in evidence retrieval for academic paper QA.
-You role is to determine whether the current evidence is sufficient to answer the user's question or we need to retrieve more evidence.
+
+Goal:
+- You need to determine whether the current evidence is sufficient to answer the user's question or we need to retrieve more evidence.
+- You need to generate search queries to retrieve more evidence if the current evidence is insufficient. Generate only the search queries don't include the selected paper ids.
+- You need to give the reasoning for your decision and the search queries you generated.
 
 General Strategy:
 - You should think step by step and reason about the user's query and the evidence.
+- All of your decisions should be based on the following context: the user's query, the paper abstracts, the retrieved evidence and the limitation of the retrieved evidence.
+- The user question is usually a research question about several selected papers and the paper abstracts are the ones of the selected papers.
+- If you can see the asnwer from the retrieved evidence, you should decide that this evidence is sufficient to answer the user's question.
 
 Routing Strategy:
-- You decision should be based on the following context: the user's query, the paper abstracts, the retrieved evidence and the past reasoning.  
 - You should only decide to answer the user when you completely understand the user's query and the evidence is sufficient to answer the question or you are certain that the database does not contain any information that could answer the question.
 
 Retrieval Strategy:
@@ -103,8 +109,7 @@ def qa_retrieve(state: State) -> Dict:
     abstracts = get_paper_abstract(selected_ids)
     segments = state.get("retrieved_segments", [])
     segments_text = "\n".join(segments)
-    past_summaries = state.get("summaries", [])
-    past_summaries_text = "\n".join(past_summaries)
+    limitation = state.get("limitation", "No segments retrieved.")
 
     abstracts_text = "\n".join([
         f"Paper {paper_id}:\n{abstract}"
@@ -118,8 +123,8 @@ Selected papers to search: {selected_ids}
 Paper abstracts:
 {abstracts_text}
 
-Past summaries:
-{past_summaries_text}
+Limitation of the retrieved evidence:
+{limitation}
 
 Retrieved evidence:
 {segments_text}"""
@@ -133,6 +138,7 @@ Retrieved evidence:
     if plan.should_answer:
         return {
             "messages": [AIMessage(content=plan.reasoning)],
+            "rd_reason": plan.reasoning,
             "sufficient_evidence": True
         }
     
@@ -141,10 +147,12 @@ Retrieved evidence:
         SystemMessage(content="Create vector search tool calls based on the search queries"),
         HumanMessage(content=f"Search queries: {plan.search_queries}, Selected papers: {selected_ids}")
     ])
-
+    retrieval_queries = state.get("retrieval_queries", []) + plan.search_queries
     return {
         "messages": [response],
-        "sufficient_evidence": False
+        "sufficient_evidence": False,
+        "retrieval_queries": retrieval_queries,
+        "rd_reason": plan.reasoning
     }
 
 def qa_rerank(state: State) -> Dict:
@@ -152,12 +160,12 @@ def qa_rerank(state: State) -> Dict:
     Extract tool results and rerank segments based on relevance.
     Uses LLM to evaluate which segments are most relevant to the user's query.
     """
+    existing_segments = state.get("retrieved_segments", [])
+
     messages = state.get("messages", [])
     user_msg = get_user_query(messages)
     selected_ids = state.get("selected_ids", [])
     
-    # Extract tool call results from the last tool messages
-    new_segments = []
     for msg in reversed(messages):
         if isinstance(msg, ToolMessage):
             # Tool message content is a JSON string of search results
@@ -167,20 +175,20 @@ def qa_rerank(state: State) -> Dict:
                     parsed = json.loads(content)
                     if isinstance(parsed, list):
                         for item in parsed:
-                            if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in new_segments:
-                                new_segments.append(item["supporting_detail"])
+                            if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in existing_segments:
+                                existing_segments.append(item["supporting_detail"])
                 elif isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in new_segments:
-                            new_segments.append(item["supporting_detail"])
+                        if isinstance(item, dict) and item.get("supporting_detail") and item["supporting_detail"] not in existing_segments:
+                            existing_segments.append(item["supporting_detail"])
             except json.JSONDecodeError:
                 # If not JSON, append as is
-                new_segments.append(content)
+                existing_segments.append(content)
         elif hasattr(msg, 'tool_calls') and msg.tool_calls:
             # Stop when we hit the tool call request
             break
     
-    if not new_segments:
+    if not existing_segments:
         return {"messages": [AIMessage(content="No new segments found. Please try again.")]}
     # Get context for reranking
     abstracts = get_paper_abstract(selected_ids)
@@ -189,50 +197,42 @@ def qa_rerank(state: State) -> Dict:
         for paper_id, abstract in abstracts.items()
     ])
     
-    past_summaries = state.get("summaries", [])
-    past_summaries_text = "\n".join(past_summaries)
-    
-    new_segments_text = "\n".join([f"Segment {i}:\n{segment}" for i, segment in enumerate(new_segments)])
+    retrieved_segments_text = "\n".join([f"Segment {i}:\n{segment}" for i, segment in enumerate(existing_segments)])
     
     rerank_system = """You are an expert in evaluating the relevance of retrieved evidence for answering a research question.
-    Your would be presented with a user question, paper abstracts, past summaries and new retrieved segments.
+    Your would be presented with a user question, paper abstracts, retrieved segments.
     The user question is usually a research question about several selected papers and the paper abstracts are the ones of the selected papers.
     The system have retrieved evidence to answer the user question or to help you understand the user question better.
-    The past summaries are the summaries of the system about the user question and the retrieved evidence.
 
     Goal:
-    - You need to select the index of the segements that can help you answer the user question, and order them by their relevance to the user question.
-    - You need to summarize the information you learned from the segments that are helpful to answer the user question.
-
+    - You need to select the index of the segments that can help you answer the user question, and order them by their relevance to the user question.
+    - You need to identify the limitation of the retrieved segments. Think of what information is missing if you answer with the current segments.
+    
     General Strategy:
     - You should think in step by step manner.
-    - The selected segments should only be the ones that are the direct evidence to answer the user question.
+    - The selected segments should only be the ones that are helpful to answer the user question, even though they are not directly related to the user question.
     - For selected segements, you should only generate the selected index of the segments. The index is present at the beginning of the segment text in format of "Segment x:" where x is the index of the segment.
-    - The summary you generate should be covering the useful information you learned from the segements and help the system to generate a better search query or answer the user question.
-    - You should not select any segment that is not directly related to the user question, it's ok you don't select any segment.
+    - It's ok if you don't select any segment.
     - You should output the selected index of the segments in the order of their relevance to the user question.
 
     Tips:
     - The retrieved segments may not be directly related to the user question, but they may help you understand the user question better and generate better search queries.
-    - For the segments that are not directly related to the user question, you should summarize the information you learned from them and don't select them in the final output.
-    - Some segments may be very short and don't contain any useful information, you should not select them."""
-
+    - Some segments may be very short and don't contain any useful information, you should not select them.
+    - If you think the retrieved segments are sufficient to answer the user question, you should put 'No limitation' in the limitation field. Be very sure about your decision."""
     # Use LLM to evaluate and extract reasoning about relevance
     rerank_prompt = f"""User question: {user_msg}
 
 Paper abstracts:
 {abstracts_text}
-Past Summaries:
-{past_summaries_text}
 
-New retrieved segments:
-{new_segments_text}
+Retrieved segments:
+{retrieved_segments_text}
 
-Select the relevant segments and generate a summary of the information you learned from them."""
+Select the relevant segments and identify the limitation of the retrieved segments."""
 
     class BatchRerankResult(BaseModel):
         selected_idx: List[int] = Field(description="The index of the selected segments")
-        summary: str = Field(description="The summary of the selected segments")
+        limitation: str = Field(description="The limitation of the retrieved segments")
 
     structured_model = qa_model.with_structured_output(BatchRerankResult)
     response = structured_model.invoke([
@@ -240,15 +240,13 @@ Select the relevant segments and generate a summary of the information you learn
         HumanMessage(content=rerank_prompt)
     ])
 
-    existing_segments = state.get("retrieved_segments", [])
-    selected_segments = [new_segments[i] for i in response.selected_idx if new_segments[i] not in existing_segments]
+    selected_segments = [existing_segments[i] for i in response.selected_idx if i < len(existing_segments)]
     # Store the new segments and reasoning
-    existing_summaries = state.get("summaries", [])
     qa_iteration = state.get("qa_iteration", 0) + 1
     
     return {
-        "retrieved_segments": existing_segments + selected_segments,
-        "summaries": existing_summaries + [response.summary],
+        "retrieved_segments": selected_segments ,
+        "limitation": response.limitation,
         "qa_iteration": qa_iteration
     }
 
@@ -265,8 +263,7 @@ def qa_answer(state: State) -> Dict:
     segments = state.get("retrieved_segments", [])
     segments_text = "\n\n".join(segments) if segments else "No evidence retrieved."
     
-    summaries = state.get("summaries", [])
-    summaries_text = "\n\n".join(summaries) if summaries else "No analysis available."
+    limitation = state.get("limitation", "No limitation")
     
     # Get paper abstracts for context
     abstracts = get_paper_abstract(selected_ids)
@@ -280,16 +277,32 @@ def qa_answer(state: State) -> Dict:
 Paper abstracts:
 {abstracts_text}
 
-Summaries:
-{summaries_text}
+Limitation of the retrieved evidence:
+{limitation}
 
 Retrieved evidence:
 {segments_text}
 
 Based on the above evidence and analysis, provide a concise yet complete answer to the user's question. If the evidence is insufficient, acknowledge the limitations."""
 
+    answer_system = """You are an expert research assistant that helps answer user questions.
+    The user question is usually a research question about several selected papers and the paper abstracts are the ones of the selected papers.
+    The system have retrieved evidence to answer the user question and the potential limitation of the retrieved evidence if any.
+    
+    Goal:
+    - You need to provide a concise yet complete answer to the user's question.
+    - You need to acknowledge the limitations of the evidence if the evidence is insufficient.
+    - You need to provide a follow-up suggestions if the evidence is insufficient.
+
+    General Strategy:
+    - YOU SHOULD DIRECTLY ANSWER THE USER'S QUESTION FIRST, THEN PROVIDE THE EVIDENCE TO SUPPORT YOUR ANSWER.
+    - If the answer is present in the retrieved evidence, you extract the answer from the evidence.
+    - BE BRIEF, CONCISE AND FACTUALLY CONSISTENT, DON'T PROVIDE UNNECESSARY INFORMATION.
+    - If the question is simple or can be extracted from the evidence. Answer the question as short as possible.
+    """
+
     response = qa_model.invoke([
-        SystemMessage(content="You are an expert research assistant. Provide accurate, well-grounded answers based on the evidence provided. Cite specific findings from the papers when relevant."),
+        SystemMessage(content=answer_system),
         HumanMessage(content=answer_prompt)
     ])
     

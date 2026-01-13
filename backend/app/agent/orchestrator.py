@@ -23,7 +23,7 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 orchestrator_model = init_chat_model(
-    model=settings.MODEL_NAME,
+    model=settings.AGENT_MODEL_NAME,
     api_key=settings.OPENAI_API_KEY
 )
 

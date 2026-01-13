@@ -8,7 +8,7 @@ from app.tools.search import (
     hybrid_search_papers,
     semantic_search_papers,
     keyword_search_papers,
-    vector_search_papers,
+    # vector_search_papers,
 )
 from app.agent.prompts import (
     RerankingPrompts,
@@ -21,7 +21,7 @@ from app.agent.utils import get_user_query, setup_langsmith
 
 logger = logging.getLogger(__name__)
 setup_langsmith()
-paper_finder_model = init_chat_model(model=settings.MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+paper_finder_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 
 class QueryGeneration(BaseModel):
@@ -67,48 +67,28 @@ def search_agent(state: State) -> Dict:
     user_msg = get_user_query(state["messages"])
 
     # Get search plan with structured output
-    prompt = SearchAgentPrompts.format_planning(
-        user_msg=user_msg,
-        search_queries=state.get("search_queries", [])
-    )
-
-    structured_model = paper_finder_model.with_structured_output(SearchPlan)
-    plan = structured_model.invoke([
-        SystemMessage(content=SearchAgentPrompts.SYSTEM),
-        *state["messages"],
-        HumanMessage(content=prompt)
-    ])
-
-    # Build tool instructions from the plan
-    tool_instructions = f"Execute the following search strategy: {plan.strategy}\n\nSearches to perform:\n"
-    for tc in plan.tool_calls:
-        tool_instructions += f"- {tc.tool_name}(query='{tc.query}', limit={tc.limit}) - {tc.reasoning}\n"
+    # prompt = SearchAgentPrompts.format_planning(
+    #     user_msg=user_msg,
+    #     search_queries=state.get("search_queries", [])
+    # )
 
     # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
     tool_bound = paper_finder_model.bind_tools([
         hybrid_search_papers,
         semantic_search_papers,
         keyword_search_papers,
-        vector_search_papers,
+        # vector_search_papers,
     ])
 
     # Invoke with explicit tool call instructions
     ai_message = tool_bound.invoke([
         SystemMessage(
-            content="You are a search execution agent. Execute the planned searches by calling the appropriate tools."),
-        HumanMessage(content=tool_instructions)
+            content="You are a paper finder agent. Find the most relevant papers for the user query by calling the appropriate tools."),
+        HumanMessage(content=user_msg)
     ])
 
-    # Extract queries for state tracking
-    queries = [tc.query for tc in plan.tool_calls]
-    search_queries = state.get("search_queries", [])
-    seen = set(q.lower() for q in search_queries)
-    merged = search_queries + \
-        [q for q in queries if q and q.lower() not in seen]
-
     return {
-        "search_queries": merged[:6],
-        "messages": [ai_message]  # Single AIMessage with multiple tool_calls!
+        "messages": [ai_message]
     }
 
 
@@ -234,20 +214,20 @@ pf_graph_builder.add_node("tools", ToolNode([
     hybrid_search_papers,
     semantic_search_papers,
     keyword_search_papers,
-    vector_search_papers,
+    # vector_search_papers,
 ]))
-pf_graph_builder.add_node("merge_and_rerank", merge_and_rerank)
-pf_graph_builder.add_node("increment_iter", increment_iter)
+# pf_graph_builder.add_node("merge_and_rerank", merge_and_rerank)
+# pf_graph_builder.add_node("increment_iter", increment_iter)
 
 pf_graph_builder.add_edge(START, "search_agent")
 
 pf_graph_builder.add_edge("search_agent", "tools")
-pf_graph_builder.add_edge("tools", "merge_and_rerank")
+pf_graph_builder.add_edge("tools", END)
 
-pf_graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
-    "search_more": "increment_iter",
-    "synthesize": END,
-})
-pf_graph_builder.add_edge("increment_iter", "search_agent")
+# pf_graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
+#     "search_more": "increment_iter",
+#     "synthesize": END,
+# })
+# pf_graph_builder.add_edge("increment_iter", "search_agent")
 
 pf_graph = pf_graph_builder.compile()

@@ -363,15 +363,8 @@ def vector_search_papers_impl(
         # Format results
         formatted_results = []
         for paper, score in results:
-            # Truncate abstract if too long
             abstract = paper.abstract
-            if len(abstract) > 400:
-                abstract = abstract[:400] + '...'
-            
-            # Truncate supporting detail if too long
             supporting_detail = paper.supporting_detail or ""
-            if len(supporting_detail) > 500:
-                supporting_detail = supporting_detail[:500] + '...'
             
             formatted_result = {
                 'arxiv_id': paper.id,
@@ -438,15 +431,8 @@ def vector_search_papers_by_ids_impl(
         # Format results
         formatted_results = []
         for paper, score in results:
-            # Truncate abstract if too long
             abstract = paper.abstract
-            if len(abstract) > 400:
-                abstract = abstract[:400] + '...'
-            
-            # Truncate supporting detail if too long
             supporting_detail = paper.supporting_detail or ""
-            if len(supporting_detail) > 500:
-                supporting_detail = supporting_detail[:500] + '...'
             
             formatted_result = {
                 'arxiv_id': paper.id,
@@ -485,3 +471,23 @@ def vector_search_papers_by_ids(
         List of papers with relevant text segments and similarity scores
     """
     return vector_search_papers_by_ids_impl(query, limit, score_threshold, ids)
+
+def get_paper_abstract(arxiv_ids: List[str]) -> Dict[str, str]:
+    """
+    Retrieve paper abstracts by arXiv IDs.
+    
+    Args:
+        arxiv_ids: List of arXiv IDs to fetch abstracts for
+    
+    Returns:
+        Dictionary mapping paper_id to abstract text
+    """
+    es_service = ElasticsearchService(settings.elasticsearch_config)
+    abstracts = {}
+    
+    for arxiv_id in arxiv_ids:
+        paper = es_service.get_paper(arxiv_id)
+        if paper and paper.get('abstract'):
+            abstracts[arxiv_id] = paper['abstract']
+    
+    return abstracts

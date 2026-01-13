@@ -69,7 +69,7 @@ def load_qasper_to_db(papers_df: pd.DataFrame) -> ArxivPaper:
     for _, row in tqdm(papers_df.iterrows(), total=len(papers_df)):
         d = row.to_dict()
         paper = convert_to_ArxivPaper(d)
-        flattened_paragraphs = [para for section in d["full_text"]["paragraphs"] for para in section]
+        flattened_paragraphs = [para for section in d["full_text"]["paragraphs"] for para in section] + [cap for cap in d["figures_and_tables"]["caption"]]
         es_service.add_paper(paper)
         qdrant_service.add_paper_with_chunks(paper, flattened_paragraphs)
 
@@ -105,9 +105,11 @@ def create_examples(dataset_id: str, paper_id: str, raw_data: QasperPaper) -> bo
             print(f"No answer type found for paper {paper_id} and question {question}")
             continue
         if ground_truth_answer and len(ground_truth_evidence) > 0:
+            ground_truth_evidence = ground_truth_evidence.tolist()
+            print("ground_truth_evidence: ", ground_truth_evidence)
             client.create_example(
                 dataset_id=dataset_id,
-                inputs={"paper_id": paper_id, "question": question},
+                inputs={"paper_id": paper_id, "question": question, 'abstract': raw_data['abstract']},
                 outputs={"ground_truth_answer": ground_truth_answer, "ground_truth_evidence": ground_truth_evidence, "answer_type": answer_type}
             )
         else:
@@ -131,10 +133,8 @@ def main():
     test_df = pd.read_parquet(Path(__file__).parent / "data" / "test.parquet")
     validation_df = pd.read_parquet(Path(__file__).parent / "data" / "validation.parquet")
     papers_df = pd.concat([train_df, test_df, validation_df])
-    load_qasper_to_langsmith(papers_df, client)
+    # load_qasper_to_langsmith(papers_df, client)
+    load_qasper_to_db(papers_df)
 
 if __name__ == "__main__":
     main()
-
-
-

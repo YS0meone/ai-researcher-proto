@@ -27,8 +27,11 @@ class State(TypedDict, total=False):
     route: Optional[Literal["search", "synthesize", "qa"]]  # Routing decision
 
     # QA state
-    # Paper IDs selected for QA (by user or from retrieval)
     selected_ids: List[str]
-    # Vector search results from selected papers
-    retrieved_segments: List[Dict[str, Any]]
-    qa_query: Optional[str]       # The specific question for QA mode
+    retrieved_segments: List[str]
+    limitation: List[str]
+    qa_query: Optional[str]
+    retrieval_queries: List[str]  # The queries used for retrieval
+    sufficient_evidence: bool     # Whether the evidence is sufficient to answer the user's question
+    qa_iteration: int             # Current QA iteration
+    rd_reason: str

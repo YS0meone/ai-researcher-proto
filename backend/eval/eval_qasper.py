@@ -16,9 +16,16 @@ import re
 import string
 from typing import List, Dict, Any
 from collections import Counter
+from app.core.config import settings
+from langchain.chat_models import init_chat_model
+from pydantic import BaseModel, Field
+from langsmith import Client
+from app.agent.qa_baseline import qa_baseline
 
 setup_langsmith()
 dataset_name = "qasper-qa-e2e"
+
+eval_model = init_chat_model(model=settings.EVAL_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 
 # ============================================================================
@@ -296,10 +303,6 @@ def qasper_evaluator(run, example) -> dict:
     return results
 
 
-# ============================================================================
-# AGENT WRAPPER
-# ============================================================================
-
 def qa_agent_wrapper(dataset_input: dict) -> dict:
     """
     Enhanced wrapper that returns answer and retrieval metadata.
@@ -321,154 +324,103 @@ def qa_agent_wrapper(dataset_input: dict) -> dict:
     answer = result_state["messages"][-1].content if result_state.get("messages") else "No answer generated"
     
     # Extract retrieved segments for evidence recall
-    retrieved_segments = [
-        seg.get("supporting_detail", "") 
-        for seg in result_state.get("retrieved_segments", [])
-    ]
+    # Note: retrieved_segments is now a List[str] (raw tool outputs), not List[Dict]
+    retrieved_segments = result_state.get("retrieved_segments", [])
     
     return {
         "answer": answer,
         "metadata": {
             "retrieved_segments": retrieved_segments,
-            "num_segments": len(retrieved_segments)
+            "num_segments": len(retrieved_segments),
+            "selected_ids": result_state.get("selected_ids", []),
+            "retrieval_queries": result_state.get("retrieval_queries", [])
+        }
+    }
+
+def qa_baseline_wrapper(dataset_input: dict) -> dict:
+    """
+    Enhanced wrapper that returns answer and retrieval metadata.
+    """
+    initial_state = {
+        "messages": [HumanMessage(content=dataset_input["question"])],
+        "selected_ids": [dataset_input["paper_id"]]
+    }
+    
+    result_state = qa_baseline.invoke(initial_state)
+    
+    return {
+        "answer": result_state["messages"][-1].content,
+        "metadata": {
+            "retrieved_segments": [],
+            "num_segments": 0,
+            "selected_ids": [],
+            "retrieval_queries": [],
+            "reasoning": result_state["reasoning"],
         }
     }
 
 
-# ============================================================================
-# RESULT ANALYSIS
-# ============================================================================
+def qa_e2e_evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+    prompt = f"""
+    You are a QA evaluator which specializes in evaluating the quality of the answer to a question related to a specific scientific paper.
+    You are given a question, a ground truth answer, a model's answer, retrieved segments, and ground truth evidence.
+    You need to evaluate the quality of the model's answer and return the score.
+    The score is a number between 0 and 1, where 1 is the best score.
+    The score is calculated based on the following criteria:
+    - The model's answer is complete and covers all the aspects of the ground truth answer.
+    - The model's answer is grounded in the retrieved segments and does not hallucinate.
+    - Even though the model's answer is not like the ground truth answer, as long as it covers all the aspects of the ground truth answer, and not hallucinating, it should be given a score of 1.
+    
+    You need to return both the score and the reasoning for the score.
+    For reasoning, you need to determine the catergory of the error (if any). The categories are:
+    - Retrieval Error: The retrieved segments does not contain the ground truth evidence.
+    - Hallucination: The model's answer is not grounded in the retrieved segments and hallucinates.
+    - Incomplete: The model's answer is not complete and does not cover all the aspects of the ground truth answer.
+    - No Error: The model's answer is complete, grounded in the retrieved segments, and does not hallucinate.
+    - Other: The model's answer is not related to the question or the ground truth answer.
+    In the reasoning mention how the retrieved segements is affecting the score.
 
-def analyze_results(eval_results):
+    Question: {inputs["question"]}
+    Ground truth answer: {reference_outputs["ground_truth_answer"]}
+    Model's answer: {outputs["answer"]}
+    Retrieved segments: {reference_outputs["ground_truth_evidence"]}
+    Ground truth evidence: {reference_outputs["ground_truth_evidence"]}
     """
-    Aggregate evaluation results by answer type and overall.
-    
-    Args:
-        eval_results: LangSmith evaluation results (iterable of dicts)
-    """
-    print("\n" + "="*60)
-    print("QASPER EVALUATION RESULTS")
-    print("="*60)
-    
-    # Aggregate metrics
-    metrics = {
-        "f1_scores": [],
-        "exact_matches": [],
-        "evidence_recalls": [],
-        "unanswerable_accuracies": [],
-        "yes_no_accuracies": [],
+
+    class QaEvaluatorResponse(BaseModel):
+        score: float = Field(ge=0.0, le=1.0)
+        reasoning: str
+
+    structured_eval_model = eval_model.with_structured_output(QaEvaluatorResponse)
+    response = structured_eval_model.invoke(prompt)
+    return {
+        "score": response.score,
+        "comment": response.reasoning  # LangSmith UI displays 'comment' field
     }
-    
-    answer_type_counts = {}
-    
-    # Collect results
-    for result in eval_results:
-        # 1. Get Answer Type directly from the Ground Truth (Example)
-        # 'result' is a dict containing {'run': ..., 'example': ..., 'evaluation_results': ...}
-        example = result.get("example")
-        ground_truth = example.outputs if hasattr(example, "outputs") else {}
-        answer_type = ground_truth.get("answer_type", "unknown")
-        
-        # Track counts
-        answer_type_counts[answer_type] = answer_type_counts.get(answer_type, 0) + 1
-        
-        # 2. Process Feedback (EvaluationResult objects)
-        feedback = result.get("evaluation_results", {}).get("results", [])
-        
-        for fb in feedback:
-            # FIX: Access attributes with dot notation, not .get()
-            key = fb.key 
-            score = fb.score
-            
-            # Access extra fields from evaluator_info if available (LangSmith stores extra dict keys here)
-            # Some versions might store flat fields in evaluator_info
-            extra_info = getattr(fb, "evaluator_info", {}) or {}
-            
-            # --- Collect Metrics ---
-            
-            # F1 Score (Primary score for answer_quality)
-            if key == "answer_quality" and score is not None:
-                metrics["f1_scores"].append(score)
-                
-            # Exact Match (often stored in extra info)
-            if "exact_match" in extra_info:
-                metrics["exact_matches"].append(extra_info["exact_match"])
-            elif key == "exact_match": # If you returned it as a separate key
-                metrics["exact_matches"].append(score)
 
-            # Evidence Recall
-            if "evidence_recall" in extra_info:
-                metrics["evidence_recalls"].append(extra_info["evidence_recall"])
-            elif key == "evidence_recall":
-                 metrics["evidence_recalls"].append(score)
-                
-            # Unanswerable Accuracy
-            if key == "unanswerable_accuracy" and score is not None:
-                metrics["unanswerable_accuracies"].append(score)
-                
-            # Yes/No Accuracy
-            if key == "yes_no_accuracy" and score is not None:
-                metrics["yes_no_accuracies"].append(score)
 
-    # Print overall metrics
-    print("\nOVERALL METRICS:")
-    print("-" * 60)
-    
-    if metrics["f1_scores"]:
-        avg_f1 = sum(metrics["f1_scores"]) / len(metrics["f1_scores"])
-        print(f"Average F1 Score:        {avg_f1:.3f}")
-    
-    if metrics["exact_matches"]:
-        avg_em = sum(metrics["exact_matches"]) / len(metrics["exact_matches"])
-        print(f"Average Exact Match:     {avg_em:.3f}")
-    
-    if metrics["evidence_recalls"]:
-        avg_recall = sum(metrics["evidence_recalls"]) / len(metrics["evidence_recalls"])
-        print(f"Average Evidence Recall: {avg_recall:.3f}")
-    
-    if metrics["unanswerable_accuracies"]:
-        avg_unans = sum(metrics["unanswerable_accuracies"]) / len(metrics["unanswerable_accuracies"])
-        print(f"Unanswerable Accuracy:   {avg_unans:.3f}")
-    
-    if metrics["yes_no_accuracies"]:
-        avg_yn = sum(metrics["yes_no_accuracies"]) / len(metrics["yes_no_accuracies"])
-        print(f"Yes/No Accuracy:         {avg_yn:.3f}")
-    
-    # Print answer type breakdown
-    print("\nANSWER TYPE DISTRIBUTION:")
-    print("-" * 60)
-    for atype, count in sorted(answer_type_counts.items()):
-        print(f"{atype:20s}: {count:4d}")
-    
-    print("\n" + "="*60)
 
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
+def retrieval_evaluator(outputs: dict, reference_outputs: dict) -> float:
+    retrieved_segments = outputs["metadata"]["retrieved_segments"]
+    ground_truth_evidence = reference_outputs["ground_truth_evidence"]
+    hit = 0
+    for gt in ground_truth_evidence:
+        if gt in retrieved_segments:
+            hit += 1
+    return hit / len(ground_truth_evidence) if len(ground_truth_evidence) > 0 else 0.0
 
 def main():
     """Run QASPER evaluation."""
     print("Starting QASPER evaluation...")
     print(f"Dataset: {dataset_name}")
-    
+    client = Client()
+    dataset = client.read_dataset(dataset_name=dataset_name)
     results = evaluate(
-        qa_agent_wrapper,
-        data=dataset_name,
-        evaluators=[qasper_evaluator],
-        max_concurrency=1,  # Avoid rate limits and ensure reproducibility
+        qa_baseline_wrapper,
+        data=client.list_examples(dataset_id=dataset.id),
+        evaluators=[qa_e2e_evaluator, retrieval_evaluator],
+        max_concurrency=1,
     )
-    
-    # Analyze and display results
-    analyze_results(results)
-    
-    # Save detailed results
-    output_file = "qasper_eval_results.csv"
-    try:
-        results.to_csv(output_file)
-        print(f"\n✅ Evaluation complete! Detailed results saved to {output_file}")
-    except Exception as e:
-        print(f"\n⚠️  Could not save results to CSV: {e}")
-        print("Results object:", results)
 
 
 if __name__ == "__main__":

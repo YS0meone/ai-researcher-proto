@@ -41,7 +41,7 @@ from app.agent.qa import qa_graph
 
 logger = logging.getLogger(__name__)
 
-model = init_chat_model(model=settings.MODEL_NAME,
+model = init_chat_model(model=settings.AGENT_MODEL_NAME,
                         api_key=settings.OPENAI_API_KEY)
 
 

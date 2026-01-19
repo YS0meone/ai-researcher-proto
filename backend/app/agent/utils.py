@@ -1,5 +1,16 @@
 from app.core.config import settings
 import os
+import time
+
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"Time taken: {end_time - start_time} seconds")
+        return result
+    return wrapper
+
 def get_user_query(messages: list) -> str:
     """Extract the original user query from the message history."""
     user_msg = ""

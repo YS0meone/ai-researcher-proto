@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str
     QDRANT_DISTANCE: str
 
+    S2_API_KEY: str
+
     @property 
     def database_config(self) -> DatabaseConfig:
         return DatabaseConfig(

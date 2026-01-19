@@ -34,7 +34,7 @@ from app.agent.orchestrator import (
 )
 
 # Import paper finder subgraph
-from app.agent.paper_finder import pf_graph
+from app.agent.paper_finder import paper_finder
 
 # Import QA subgraph
 from app.agent.qa import qa_graph
@@ -53,14 +53,7 @@ graph_builder = StateGraph(State)
 
 # Add all nodes
 graph_builder.add_node("orchestrator", orchestrator_intent_analysis)
-graph_builder.add_node("search_agent", pf_graph)
-graph_builder.add_node("tools", ToolNode([
-    hybrid_search_papers,
-    semantic_search_papers,
-    keyword_search_papers,
-    search_papers_by_category,
-    vector_search_papers,
-]))
+graph_builder.add_node("paper_finder", paper_finder)
 graph_builder.add_node("qa_agent", qa_graph)  # QA subgraph
 
 # Entry point: orchestrator analyzes intent
@@ -71,7 +64,7 @@ graph_builder.add_conditional_edges(
     "orchestrator",
     orchestrator_route_decision_entry,
     {
-        "search": "search_agent",
+        "search": "paper_finder",
         "qa": "qa_agent",
         "refusal": END,
     }
@@ -79,7 +72,7 @@ graph_builder.add_conditional_edges(
 
 # After paper finder, decide whether to end or go to QA
 graph_builder.add_conditional_edges(
-    "search_agent",
+    "paper_finder",
     orchestrator_route_decision_after_paper_finder,
     {
         "end": END,              # No QA needed - end here

@@ -4,7 +4,9 @@ from app.db.models import Paper
 from app.db.session import AsyncSessionLocal
 from app.services.elasticsearch import ElasticsearchService
 from app.services.qdrant import QdrantService
+from app.services.s2_client import S2Client
 from app.core.config import settings
+from pydantic import BaseModel, Field
 
 
 @tool
@@ -491,3 +493,66 @@ def get_paper_abstract(arxiv_ids: List[str]) -> Dict[str, str]:
             abstracts[arxiv_id] = paper['abstract']
     
     return abstracts
+
+
+class S2SearchPapersRequest(BaseModel):
+    reasoning: str = Field(..., description="Think in step by step and provide the reasoning for the search query and other arguments")
+    query: str = Field(..., description="Plain-text search query string.")
+    year: str = Field(
+        None, 
+        description="Restrict results to the given range of publication years (e.g. '2020', '2018-2020')."
+    )
+    venue: list = Field(
+        None, 
+        description="Restrict results to one or more venue names (e.g. conference or journal names)."
+    )
+    fields_of_study: list = Field(
+        None, 
+        description="Restrict results to the given list of fields of study, using the s2FieldsOfStudy field (e.g. ['Computer Science', 'Mathematics'])."
+    )
+    publication_date_or_year: str = Field(
+        None, 
+        description=(
+            "Restrict results to the given range of publication date in the format "
+            "<start_date>:<end_date>, where dates are in the format "
+            "YYYY-MM-DD, YYYY-MM, or YYYY"
+        )
+    )
+    min_citation_count: int = Field(
+        None, 
+        description="Restrict results to papers with at least this number of citations."
+    )
+    match_title: bool = Field(
+        False, 
+        description="If true, retrieve a single paper whose title best matches the query."
+    )
+
+@tool(
+    args_schema=S2SearchPapersRequest,
+    response_format="content_and_artifact"
+    )
+def s2_search_papers(
+    reasoning: str,
+    query: str,
+    year: str = None,
+    venue: list = None,
+    fields_of_study: list = None,
+    publication_date_or_year: str = None,
+    min_citation_count: int = None,
+    match_title: bool = False
+):
+    """
+    Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
+     and minimum citation count.
+    """
+    s2_client = S2Client()
+    results = s2_client.search_papers(
+        query=query,
+        year=year,
+        venue=venue,
+        fields_of_study=fields_of_study,
+        publication_date_or_year=publication_date_or_year,
+        min_citation_count=min_citation_count,
+        match_title=match_title
+    )
+    return f"I found {len(results)} papers for your query.", results

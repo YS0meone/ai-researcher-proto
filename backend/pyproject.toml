@@ -36,4 +36,6 @@ dependencies = [
     "numpy>=1.26.0",
     "matplotlib>=3.8.0",
     "langchain-google-genai>=4.0.0",
+    "semanticscholar>=0.8.0",
+    "rerankers>=0.10.0",
 ]

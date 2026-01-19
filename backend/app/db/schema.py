@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 
 class ArxivPaper(BaseModel):
@@ -50,3 +50,44 @@ class ArxivPaperBatch(BaseModel):
     def to_elasticsearch_docs(self) -> List[dict]:
         """Convert all papers to Elasticsearch document format."""
         return [paper.to_elasticsearch_doc() for paper in self.papers]
+
+class S2Journal(BaseModel):
+    name: Optional[str] = Field(None, description="Journal name")
+    pages: Optional[str] = Field(None, description="Pages")
+    volume: Optional[str] = Field(None, description="Volume")
+
+class S2PublicationVenue(BaseModel):
+    alternate_names: Optional[list] = Field(None, description="Alternate names")
+    alternate_urls: Optional[list] = Field(None, description="Alternate URLs")
+    id: Optional[str] = Field(None, description="ID")
+    issn: Optional[str] = Field(None, description="ISSN")
+    name: Optional[str] = Field(None, description="Name")
+    type: Optional[str] = Field(None, description="Type")
+    url: Optional[str] = Field(None, description="URL")
+
+class S2Paper(BaseModel):
+    """Pydantic model for Semantic Schlar paper data matching the official schema."""
+    abstract: Optional[str] = Field(None, description="Paper abstract")
+    authors: Optional[list] = Field(None, description="List of authors")
+    citationCount: Optional[int] = Field(None, description="Number of citations")
+    citationStyles: Optional[dict] = Field(None, description="Citation styles")
+    corpusId: Optional[int] = Field(None, description="Corpus ID")
+    externalIds: Optional[dict] = Field(None, description="External IDs such as DOI, ArXivId, etc.")
+    fieldsOfStudy: Optional[list] = Field(None, description="Fields of study")
+    influentialCitationCount: Optional[int] = Field(None, description="Influential citation count")
+    isOpenAccess: Optional[bool] = Field(None, description="Whether paper is open access")
+    journal: Optional[S2Journal] = Field(None, description="Journal information")
+    openAccessPdf: Optional[Dict] = Field(None, description="Open access PDF information")
+    paperId: str = Field(..., description="Semantic Scholar paper ID")
+    publicationDate: Optional[datetime] = Field(None, description="Publication date (ISO 8601 string)")
+    publicationTypes: Optional[list] = Field(None, description="Types of publication")
+    publicationVenue: Optional[S2PublicationVenue] = Field(None, description="Publication venue information")
+    referenceCount: Optional[int] = Field(None, description="Reference count")
+    s2FieldsOfStudy: Optional[list] = Field(None, description="S2 fields of study")
+    title: Optional[str] = Field(None, description="Paper title")
+    url: Optional[str] = Field(None, description="Semantic Scholar paper URL")
+    venue: Optional[str] = Field(None, description="Venue display name")
+    year: Optional[int] = Field(None, description="Publication year")
+    # Extra official S2 fields (for completeness, but not always returned)
+    tldr: Optional[dict] = Field(None, description="Short summary")
+

@@ -16,7 +16,7 @@ class State(TypedDict, total=False):
                              "qa_only", "search_only"]]  # User intent
     optimized_query: Optional[str]  # Query optimized for search
     paper_search_iteration: int     # Current paper search iteration (max 3)
-    original_query: Optional[str]   # Original user query for reference
+    is_clear: Optional[bool]        # Whether the user's query is clear
 
     # Paper finding state
     papers: List[Dict[str, Any]]  # Retrieved papers from search

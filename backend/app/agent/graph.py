@@ -49,39 +49,49 @@ model = init_chat_model(model=settings.AGENT_MODEL_NAME,
 # BUILD UNIFIED GRAPH
 # ============================================================================
 
-graph_builder = StateGraph(State)
+# graph_builder = StateGraph(State)
 
-# Add all nodes
-graph_builder.add_node("orchestrator", orchestrator_intent_analysis)
-graph_builder.add_node("paper_finder", paper_finder)
-graph_builder.add_node("qa_agent", qa_graph)  # QA subgraph
+# # Add all nodes
+# graph_builder.add_node("orchestrator", orchestrator_intent_analysis)
+# graph_builder.add_node("paper_finder", paper_finder)
+# graph_builder.add_node("qa_agent", qa_graph)  # QA subgraph
 
-# Entry point: orchestrator analyzes intent
-graph_builder.add_edge(START, "orchestrator")
+# # Entry point: orchestrator analyzes intent
+# graph_builder.add_edge(START, "orchestrator")
 
-# From orchestrator, route based on intent
-graph_builder.add_conditional_edges(
-    "orchestrator",
-    orchestrator_route_decision_entry,
-    {
-        "search": "paper_finder",
-        "qa": "qa_agent",
-        "refusal": END,
-    }
-)
+# # From orchestrator, route based on intent
+# graph_builder.add_conditional_edges(
+#     "orchestrator",
+#     orchestrator_route_decision_entry,
+#     {
+#         "search": "paper_finder",
+#         "qa": "qa_agent",
+#         "refusal": END,
+#     }
+# )
 
-# After paper finder, decide whether to end or go to QA
-graph_builder.add_conditional_edges(
-    "paper_finder",
-    orchestrator_route_decision_after_paper_finder,
-    {
-        "end": END,              # No QA needed - end here
-        "qa": "qa_agent",      # Papers sufficient - proceed to QA
-    }
-)
+# # After paper finder, decide whether to end or go to QA
+# graph_builder.add_conditional_edges(
+#     "paper_finder",
+#     orchestrator_route_decision_after_paper_finder,
+#     {
+#         "end": END,              # No QA needed - end here
+#         "qa": "qa_agent",      # Papers sufficient - proceed to QA
+#     }
+# )
 
-# QA agent goes directly to END
-graph_builder.add_edge("qa_agent", END)
+# # QA agent goes directly to END
+# graph_builder.add_edge("qa_agent", END)
 
-# Compile the graph
-graph = graph_builder.compile()
+# # Compile the graph
+# graph = graph_builder.compile()
+
+
+# test
+
+graph = StateGraph(State)
+graph.add_node("paper_finder", paper_finder)
+graph.add_edge(START, "paper_finder")
+graph.add_edge("paper_finder", END)
+
+graph = graph.compile()

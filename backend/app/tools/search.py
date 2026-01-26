@@ -502,11 +502,11 @@ class S2SearchPapersRequest(BaseModel):
         None, 
         description="Restrict results to the given range of publication years (e.g. '2020', '2018-2020')."
     )
-    venue: list = Field(
+    venue: List[str] = Field(
         None, 
         description="Restrict results to one or more venue names (e.g. conference or journal names)."
     )
-    fields_of_study: list = Field(
+    fields_of_study: List[str] = Field(
         None, 
         description="Restrict results to the given list of fields of study, using the s2FieldsOfStudy field (e.g. ['Computer Science', 'Mathematics'])."
     )
@@ -535,15 +535,16 @@ def s2_search_papers(
     reasoning: str,
     query: str,
     year: str = None,
-    venue: list = None,
-    fields_of_study: list = None,
+    venue: List[str] = None,
+    fields_of_study: List[str] = None,
     publication_date_or_year: str = None,
     min_citation_count: int = None,
     match_title: bool = False
 ):
     """
     Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
-     and minimum citation count.
+     and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
+     let 
     """
     s2_client = S2Client()
     results = s2_client.search_papers(

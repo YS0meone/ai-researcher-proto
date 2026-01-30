@@ -1,6 +1,7 @@
 from app.core.config import settings
 import os
 import time
+from app.db.schema import S2Paper
 
 def timer(func):
     def wrapper(*args, **kwargs):
@@ -21,6 +22,10 @@ def get_user_query(messages: list) -> str:
             user_msg = m["content"]
     return user_msg 
     
+def get_paper_info_text(papers: list[S2Paper]) -> str:
+    """Get the text of the papers."""
+    return "\n".join([f"Paper {paper.paperId}: {paper.title}\nAuthors: {paper.authors}\nPublication Date: {paper.publicationDate}\nAbstract: {paper.abstract}\n" for paper in papers])
+
 def setup_langsmith():
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.LANGSMITH_TRACING_V2)
     os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT

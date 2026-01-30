@@ -1,4 +1,4 @@
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 from typing import List, Dict, Any, Optional
 from app.db.models import Paper
 from app.db.session import AsyncSessionLocal
@@ -7,6 +7,12 @@ from app.services.qdrant import QdrantService
 from app.services.s2_client import S2Client
 from app.core.config import settings
 from pydantic import BaseModel, Field
+from langgraph.types import Command
+import os
+from rerankers import Reranker, Document
+from app.db.schema import S2Paper
+from langchain_tavily import TavilySearchResults
+
 
 
 @tool
@@ -532,6 +538,7 @@ class S2SearchPapersRequest(BaseModel):
     response_format="content_and_artifact"
     )
 def s2_search_papers(
+    runtime: ToolRuntime,
     reasoning: str,
     query: str,
     year: str = None,
@@ -539,15 +546,17 @@ def s2_search_papers(
     fields_of_study: List[str] = None,
     publication_date_or_year: str = None,
     min_citation_count: int = None,
-    match_title: bool = False
+    match_title: bool = False,
 ):
     """
     Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
      and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
      let 
     """
+    state = runtime.state
+    # Get new papers from S2
     s2_client = S2Client()
-    results = s2_client.search_papers(
+    new_results = s2_client.search_papers(
         query=query,
         year=year,
         venue=venue,
@@ -556,4 +565,112 @@ def s2_search_papers(
         min_citation_count=min_citation_count,
         match_title=match_title
     )
-    return f"I found {len(results)} papers for your query.", results
+    
+    existing_papers = state.get("papers", [])
+    
+    all_papers = list(existing_papers) + list(new_results)
+    unique_papers = {p.paperId: p for p in all_papers}
+    deduped_list = list(unique_papers.values())
+    
+    if len(deduped_list) > 0:
+        try:
+            ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
+            docs = []
+            for paper in deduped_list:
+                content_text = f"Title: {paper.title}\nAbstract: {paper.abstract}\nAuthors: {paper.authors}"
+                docs.append(Document(
+                    text=content_text,
+                    doc_id=str(paper.paperId),
+                    metadata=paper.model_dump()
+                ))
+            
+            user_query = state["optimized_query"]
+            reranked_results = ranker.rank(query=user_query, docs=docs)
+            top_matches = reranked_results.top_k(k=10)
+            
+            final_papers = []
+            for match in top_matches:
+                paper_obj = S2Paper.model_validate(match.document.metadata)
+                final_papers.append(paper_obj)
+        except Exception as e:
+            print(f"Reranking failed in tool: {e}")
+            final_papers = deduped_list[:10]
+    else:
+        final_papers = []
+    
+    return Command(
+        update={"papers": final_papers},
+        content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
+        artifact=new_results
+    )
+
+
+class TavilySearchRequest(BaseModel):
+    reasoning: str = Field(..., description="Explain why you need to understand this research topic better and what you hope to learn")
+    query: str = Field(..., description="A natural language query about the research topic or field you want to understand")
+
+
+@tool(args_schema=TavilySearchRequest)
+def tavily_research_overview(reasoning: str, query: str) -> str:
+    """
+    Search for general information about research topics using Tavily web search.
+    
+    **When to use this tool:**
+    - When the research topic is GENERAL or UNFAMILIAR to you
+    - When you need to understand what a research field or topic is about
+    - When you want to identify the most FAMOUS/SEMINAL papers in a field
+    - BEFORE searching academic databases, to avoid missing important foundational work
+    - When you need context about trending research areas or breakthrough papers
+    
+    **This tool helps you:**
+    - Understand the landscape of a research topic
+    - Find names of influential papers, authors, and concepts
+    - Identify key terms and methodologies to use in academic searches
+    - Discover landmark papers that should not be missed
+    
+    **Example use cases:**
+    - "What are the most important papers in transformer architectures?"
+    - "What is the current state of research in quantum machine learning?"
+    - "Who are the key researchers and what are the foundational papers in reinforcement learning?"
+    
+    Args:
+        reasoning: Your reasoning for why you need this overview
+        query: Natural language question about the research topic
+        
+    Returns:
+        Web search results with information about the research topic, including
+        mentions of famous papers, key researchers, and important concepts.
+    """
+    try:
+        tavily = TavilySearchResults(
+            max_results=5,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=False,
+            include_images=False
+        )
+        
+        results = tavily.invoke({"query": query})
+        
+        # Format results for better readability
+        if isinstance(results, list):
+            formatted_output = []
+            formatted_output.append(f"Research Topic Overview for: {query}\n")
+            formatted_output.append("=" * 80 + "\n")
+            
+            for i, result in enumerate(results, 1):
+                if isinstance(result, dict):
+                    title = result.get('title', 'No title')
+                    content = result.get('content', 'No content')
+                    url = result.get('url', '')
+                    
+                    formatted_output.append(f"\n{i}. {title}")
+                    formatted_output.append(f"   URL: {url}")
+                    formatted_output.append(f"   Content: {content}\n")
+            
+            return "\n".join(formatted_output)
+        else:
+            return str(results)
+            
+    except Exception as e:
+        return f"Error searching with Tavily: {str(e)}. You may proceed with direct academic database search."

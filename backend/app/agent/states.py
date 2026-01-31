@@ -1,5 +1,6 @@
-from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict
+from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict, Tuple
 from langgraph.graph.message import add_messages
+import operator
 
 
 class State(TypedDict, total=False):
@@ -37,6 +38,9 @@ class State(TypedDict, total=False):
 class PaperFinderState(TypedDict):
     messages: Annotated[list, add_messages]
     optimized_query: Optional[str]
-    plan_steps: List[str]
+    plan_steps: List[str]       
+    completed_steps: Annotated[List[Tuple[str, str]], operator.add]
     plan_reasoning: str
     papers: List[Dict[str, Any]]
+    iter: int
+    goal_achieved: bool

@@ -1,5 +1,6 @@
-from langchain.tools import tool, ToolRuntime
-from typing import List, Dict, Any, Optional
+from langchain.tools import tool
+from langgraph.prebuilt import InjectedState
+from typing import List, Dict, Any, Optional, Annotated
 from app.db.models import Paper
 from app.db.session import AsyncSessionLocal
 from app.services.elasticsearch import ElasticsearchService
@@ -11,9 +12,8 @@ from langgraph.types import Command
 import os
 from rerankers import Reranker, Document
 from app.db.schema import S2Paper
-from langchain_tavily import TavilySearchResults
-
-
+from langchain_tavily import TavilySearch
+from app.agent.utils import get_paper_info_text
 
 @tool
 async def search_papers(query: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -538,7 +538,6 @@ class S2SearchPapersRequest(BaseModel):
     response_format="content_and_artifact"
     )
 def s2_search_papers(
-    runtime: ToolRuntime,
     reasoning: str,
     query: str,
     year: str = None,
@@ -547,24 +546,43 @@ def s2_search_papers(
     publication_date_or_year: str = None,
     min_citation_count: int = None,
     match_title: bool = False,
+    runtime: Annotated[dict, InjectedState] = None,
 ):
     """
     Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
      and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
      let 
     """
-    state = runtime.state
+    # Get state from runtime (if available)
+    state = runtime.state if runtime else {}
+    
     # Get new papers from S2
-    s2_client = S2Client()
-    new_results = s2_client.search_papers(
-        query=query,
-        year=year,
-        venue=venue,
-        fields_of_study=fields_of_study,
-        publication_date_or_year=publication_date_or_year,
-        min_citation_count=min_citation_count,
-        match_title=match_title
-    )
+    try:
+        s2_client = S2Client()
+        new_results = s2_client.search_papers(
+            query=query,
+            year=year,
+            venue=venue,
+            fields_of_study=fields_of_study,
+            publication_date_or_year=publication_date_or_year,
+            min_citation_count=min_citation_count,
+            match_title=match_title
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "Title match not found" in error_msg or "ObjectNotFoundException" in str(type(e)):
+            # Handle title match failure gracefully
+            if runtime:
+                return Command(
+                    update={},
+                    content=f"No exact title match found for query: '{query}'. Try searching without title matching or rephrase the query.",
+                    artifact=[]
+                )
+            else:
+                return f"No exact title match found for query: '{query}'. Try searching without title matching.", []
+        else:
+            # Re-raise other exceptions
+            raise
     
     existing_papers = state.get("papers", [])
     
@@ -584,7 +602,7 @@ def s2_search_papers(
                     metadata=paper.model_dump()
                 ))
             
-            user_query = state["optimized_query"]
+            user_query = state.get("optimized_query", query)
             reranked_results = ranker.rank(query=user_query, docs=docs)
             top_matches = reranked_results.top_k(k=10)
             
@@ -598,11 +616,16 @@ def s2_search_papers(
     else:
         final_papers = []
     
-    return Command(
-        update={"papers": final_papers},
-        content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
-        artifact=new_results
-    )
+    # Return Command to update state if runtime is available
+    if runtime:
+        return Command(
+            update={"papers": final_papers},
+            content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
+            artifact=new_results
+        )
+    else:
+        # For testing without runtime
+        return f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.", new_results
 
 
 class TavilySearchRequest(BaseModel):
@@ -642,7 +665,7 @@ def tavily_research_overview(reasoning: str, query: str) -> str:
         mentions of famous papers, key researchers, and important concepts.
     """
     try:
-        tavily = TavilySearchResults(
+        tavily = TavilySearch(
             max_results=5,
             search_depth="advanced",
             include_answer=True,
@@ -674,3 +697,23 @@ def tavily_research_overview(reasoning: str, query: str) -> str:
             
     except Exception as e:
         return f"Error searching with Tavily: {str(e)}. You may proceed with direct academic database search."
+    
+@tool
+def get_paper_details(
+    runtime: Annotated[dict, InjectedState] = None,
+) -> str:
+    """
+    Get the metadata of the papers in the paper list. Call it if you need to know the details of the papers in the paper list.
+    
+    Returns:
+    The metadata of the papers in the paper list.
+    """
+
+    state = runtime.state if runtime else {}
+    papers = state.get("papers", [])
+    if len(papers) == 0:
+        return "No paper in the paper list."
+
+    paper_info_text = get_paper_info_text(papers)
+    return paper_info_text
+

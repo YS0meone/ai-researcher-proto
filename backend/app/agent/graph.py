@@ -1,12 +1,3 @@
-"""
-Main Graph - Unified multi-agent workflow for AI research assistant.
-
-This module orchestrates:
-1. Intent analysis and query optimization (orchestrator)
-2. Paper search with iterative refinement (paper_finder)
-3. Question answering on selected papers (qa)
-"""
-
 from typing import Annotated, List, Dict, Any, Optional, Literal, Sequence
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
@@ -25,13 +16,8 @@ from pydantic import BaseModel, Field
 import logging
 from app.agent.states import State
 from app.agent.utils import get_user_query
+from app.agent.states import PaperFinderState
 
-# Import orchestrator functions
-from app.agent.orchestrator import (
-    orchestrator_intent_analysis,
-    orchestrator_route_decision_entry,
-    orchestrator_route_decision_after_paper_finder,
-)
 
 # Import paper finder subgraph
 from app.agent.paper_finder import paper_finder
@@ -89,7 +75,7 @@ model = init_chat_model(model=settings.AGENT_MODEL_NAME,
 
 # test
 
-graph = StateGraph(State)
+graph = StateGraph(PaperFinderState)
 graph.add_node("paper_finder", paper_finder)
 graph.add_edge(START, "paper_finder")
 graph.add_edge("paper_finder", END)

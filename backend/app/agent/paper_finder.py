@@ -5,7 +5,7 @@ from app.agent.states import State, PaperFinderState
 from langgraph.prebuilt import ToolNode
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from app.tools.search import s2_search_papers, tavily_research_overview
+from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details
 import os
 from app.core.config import settings
 from app.agent.utils import setup_langsmith, get_user_query, get_paper_info_text
@@ -13,21 +13,21 @@ from langchain_core.messages import ToolMessage
 from rerankers import Reranker, Document
 from app.db.schema import S2Paper
 from pydantic import BaseModel, Field
-from typing import List, Tuple
-from langchain.agents import create_agent
+from typing import List, Tuple, Annotated, Union
+from langchain.agents import create_agent, AgentState
+import operator
 
 setup_langsmith()
 
 ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
 
-tools = [tavily_research_overview, s2_search_papers]
+tools = [tavily_research_overview, s2_search_papers, get_paper_details]
 tool_node = ToolNode(tools)
 
 MAX_ITER = 3
 
 model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
-tool_reasoning_model = model.bind_tools(tools, tool_choice="none")
-search_agent_model = model.bind_tools(tools)
+search_agent_model = model.bind_tools(tools, parallel_tool_calls=False)
 
 def planner(state: PaperFinderState):
     system_prompt = """
@@ -106,7 +106,7 @@ def replan_agent(state: PaperFinderState):
     - If you think the current plan is good enough, you can simply remove the steps that are already completed and keep the rest of the plan.
     - The completed steps should not be included in the new plan.
     Limit the number of new steps to 2 or less.
-    Think step by step and provide the reasoning for your plan.
+
     """
 
     paper_info_text = get_paper_info_text(state.get("papers", []))
@@ -120,28 +120,37 @@ def replan_agent(state: PaperFinderState):
     Current Plan: {state.get("plan_steps", [])}
     """
 
-    class ReplanPlan(BaseModel):
+    class ReplanDecision(BaseModel):
         goal_achieved: bool = Field(description="Whether the goal is achieved or not")
+        
+    class ReplanPlan(BaseModel):
         plan_reasoning: str = Field(description="The reasoning for the new plan")
         plan_steps: List[str] = Field(description="The steps of the new plan")
+    
+    class Replan(BaseModel):
+        replan_reply: Union[ReplanDecision, ReplanPlan] = Field(description="The reply from the replan agent, either a decision to stop or a new plan")
 
-    structured_model = model.with_structured_output(ReplanPlan)
+    structured_model = model.with_structured_output(Replan)
 
     try:
         response = structured_model.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt)
         ])
-        return {"plan_steps": response.plan_steps, "plan_reasoning": response.plan_reasoning, "goal_achieved": response.goal_achieved}
+        if isinstance(response.replan_reply, ReplanDecision):
+            return {"goal_achieved": response.replan_reply.goal_achieved}
+        else:
+            return {"goal_achieved": False, "plan_steps": response.replan_reply.plan_steps, "plan_reasoning": response.replan_reply.plan_reasoning}
     except Exception as e:
         print(f"Error in replan_agent: {e}")
-        # Continue with existing plan
+        # Fallback to existing plan
         current_plan = state.get("plan_steps", [])
         return {
+            "goal_achieved": False,
             "plan_steps": current_plan[1:] if len(current_plan) > 1 else ["Search for more relevant papers"],
-            "plan_reasoning": "Continuing with adjusted plan due to replanning error",
-            "goal_achieved": False
+            "plan_reasoning": "Continuing with adjusted plan due to replanning error"
         }
+
 
 def search_agent(state: PaperFinderState):
     search_query_prompt = """
@@ -156,41 +165,50 @@ def search_agent(state: PaperFinderState):
     Reflect on the past action, and completed steps and decide what to do next to finish the goal.
     If you think you got the desired results, you can stop and summarize what you found.
     The summarization should be concise and to the point.
+    Never create parallel tool calls on the same tool.
     Think step by step.
     """
 
     iter = state.get("iter", 0)
     plan_steps = state.get("plan_steps", [])
     
+    class SearchAgentState(AgentState):
+        optimized_query: str
+        papers: List[S2Paper]
+
     # Handle empty plan_steps
     if not plan_steps:
         current_goal = "Search for relevant papers based on the user query"
     else:
         current_goal = plan_steps[0]
 
-    search_agent = create_agent(model=search_agent_model, tools=tools)
+    search_agent = create_agent(model=search_agent_model, tools=tools, state_schema=SearchAgentState, system_prompt=search_query_prompt)
 
     user_prompt = f"""
     User query: {state.get("optimized_query", "")}
     Current Goal: {current_goal}
-    Completed Steps: {state.get("completed_steps", [])}
+    Completed Steps: 
+    {completed_steps_formatter(state.get("completed_steps", []))}
     """
 
-    response = search_agent.invoke({"messages": [SystemMessage(content=search_query_prompt), HumanMessage(content=user_prompt)]})
+    search_agent_state = {
+        "optimized_query": state.get("optimized_query", ""),
+        "papers": state.get("papers", []),
+        "messages": [HumanMessage(content=user_prompt)]
+    }
+    
+    response = search_agent.invoke(search_agent_state)
+
     if isinstance(response["messages"][-1].content, list):
         content = " ".join([item["text"] for item in response["messages"][-1].content])
-        print(content)
     elif isinstance(response["messages"][-1].content, str):
         content = response["messages"][-1].content
-        print(content)
-        print(type(content))
-
     else:
         content = str(response["messages"][-1].content)
         print(type(content))
         print(f"the content is: {content}")
     step_summary = (current_goal, content)
-    return {"completed_steps": [step_summary], "iter": iter + 1}
+    return {"papers": response["papers"], "completed_steps": [step_summary], "iter": iter + 1}
 
 
 def should_clarify(state: PaperFinderState):

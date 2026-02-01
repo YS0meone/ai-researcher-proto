@@ -1,4 +1,4 @@
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 from langgraph.prebuilt import InjectedState
 from typing import List, Dict, Any, Optional, Annotated
 from app.db.models import Paper
@@ -14,6 +14,8 @@ from rerankers import Reranker, Document
 from app.db.schema import S2Paper
 from langchain_tavily import TavilySearch
 from app.agent.utils import get_paper_info_text
+from langchain_core.messages import ToolMessage
+from pydantic import ConfigDict
 
 @tool
 async def search_papers(query: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -502,6 +504,10 @@ def get_paper_abstract(arxiv_ids: List[str]) -> Dict[str, str]:
 
 
 class S2SearchPapersRequest(BaseModel):
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    runtime: ToolRuntime
     reasoning: str = Field(..., description="Think in step by step and provide the reasoning for the search query and other arguments")
     query: str = Field(..., description="Plain-text search query string.")
     year: str = Field(
@@ -534,10 +540,10 @@ class S2SearchPapersRequest(BaseModel):
     )
 
 @tool(
-    args_schema=S2SearchPapersRequest,
-    response_format="content_and_artifact"
+    args_schema=S2SearchPapersRequest
     )
 def s2_search_papers(
+    runtime: ToolRuntime,
     reasoning: str,
     query: str,
     year: str = None,
@@ -546,16 +552,15 @@ def s2_search_papers(
     publication_date_or_year: str = None,
     min_citation_count: int = None,
     match_title: bool = False,
-    runtime: Annotated[dict, InjectedState] = None,
 ):
     """
     Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
-     and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
-     let 
+    and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
+    let use the  
     """
     # Get state from runtime (if available)
     state = runtime.state if runtime else {}
-    
+    tool_call_id = runtime.tool_call_id
     # Get new papers from S2
     try:
         s2_client = S2Client()
@@ -572,17 +577,13 @@ def s2_search_papers(
         error_msg = str(e)
         if "Title match not found" in error_msg or "ObjectNotFoundException" in str(type(e)):
             # Handle title match failure gracefully
-            if runtime:
-                return Command(
-                    update={},
-                    content=f"No exact title match found for query: '{query}'. Try searching without title matching or rephrase the query.",
-                    artifact=[]
-                )
-            else:
-                return f"No exact title match found for query: '{query}'. Try searching without title matching.", []
+            return Command(
+                update={"messages": [ToolMessage(content=f"No exact title match found for query: '{query}'. Try searching without title matching or rephrase the query.", tool_call_id=tool_call_id)]}
+            )
         else:
-            # Re-raise other exceptions
-            raise
+            return Command(
+                update={"messages": [ToolMessage(content=f"Error searching for papers: {error_msg}", tool_call_id=tool_call_id)]}
+            )
     
     existing_papers = state.get("papers", [])
     
@@ -616,17 +617,14 @@ def s2_search_papers(
     else:
         final_papers = []
     
-    # Return Command to update state if runtime is available
-    if runtime:
-        return Command(
-            update={"papers": final_papers},
-            content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
-            artifact=new_results
-        )
-    else:
-        # For testing without runtime
-        return f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.", new_results
 
+    return Command(
+        update={"papers": final_papers, "messages": [
+            ToolMessage(
+                content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
+                tool_call_id=tool_call_id
+                )]}
+    )
 
 class TavilySearchRequest(BaseModel):
     reasoning: str = Field(..., description="Explain why you need to understand this research topic better and what you hope to learn")

@@ -1,22 +1,19 @@
 from langchain.chat_models import init_chat_model
-from langchain.messages import HumanMessage, SystemMessage, AIMessage
+from langchain.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, END, StateGraph
-from app.agent.states import State, PaperFinderState
+from app.agent.states import PaperFinderState
 from langgraph.prebuilt import ToolNode
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details
-import os
 from app.core.config import settings
-from app.agent.utils import setup_langsmith, get_user_query, get_paper_info_text
-from langchain_core.messages import ToolMessage
+from app.agent.utils import setup_langsmith, get_paper_info_text
 from rerankers import Reranker, Document
 from app.db.schema import S2Paper
 from pydantic import BaseModel, Field
 from typing import List, Tuple, Annotated, Union
-from langchain.agents import create_agent, AgentState
-import operator
+from langchain.agents import AgentState
 from langgraph.prebuilt import tools_condition
+import os
+
 
 setup_langsmith()
 
@@ -26,6 +23,7 @@ tools = [tavily_research_overview, s2_search_papers, get_paper_details]
 tool_node = ToolNode(tools)
 
 MAX_ITER = 3
+MAX_PAPER_LIST_LENGTH = 20
 
 model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 search_agent_model = model.bind_tools(tools)
@@ -33,7 +31,7 @@ search_agent_model = model.bind_tools(tools)
 def planner(state: PaperFinderState):
     system_prompt = """
     You are a senior researcher. The goal is to create a plan for your research assistant to find the most relevant papers to the user query.
-    You are provided with a user query and a list of papers known to the research assistant.
+    You are provided with a user query and potentially a list of papers known to the research assistant.
     You need to plan the best way to find the most relevant papers to the user query.
     There are two different methods for your assistant to find papers:
     1. General web search. This is important to understand the general context for the user query and find the most relevant papers from the web.
@@ -44,20 +42,25 @@ def planner(state: PaperFinderState):
         For example:
         - If the user query is about a general topic. You might want the assistant to use the general web search and then use the academic databases to find the most relevant papers.
         - If the user query is about a specific paper. You might want the assistant to use the academic database with certain keywords or metadata filters to search for that specific paper
-        If not you can use general web search or academic data database Find the anchor paper first
+    - Currently you don't have access to citation chase tool so the strategy of finding anchor paper and then performing citation chase is not gonna work.
     - The granularity of each step should be adequate for the assistant to finish within one execution.
-    Limit the number of steps to 2 or less.
+    - Keep each step concise and to the point
+    Limit the number of steps to 3 or less.
     """
 
     paper_info_text = get_paper_info_text(state.get("papers", []))
-    user_query = state["optimized_query"]
+    user_query = f"""
+    User query: {state['optimized_query']}
+    """
+
     user_prompt = f"""
     User query: {user_query}
     Papers information:
     {paper_info_text}
     """
+    
     class Plan(BaseModel):
-        plan_reasoning: str = Field(description="The reasoning for the plan")
+        plan_reasoning: str = Field(description="The reasoning for the plan you generated")
         plan_steps: List[str] = Field(description="The steps of the plan")
 
     structured_model = model.with_structured_output(Plan)
@@ -70,7 +73,6 @@ def planner(state: PaperFinderState):
         return {"plan_steps": response.plan_steps, "plan_reasoning": response.plan_reasoning}
     except Exception as e:
         print(f"Error in planner: {e}")
-        # Fallback plan
         return {
             "plan_steps": [
                 "Use web search to understand the research topic",
@@ -86,7 +88,7 @@ def completed_steps_formatter(completed_steps: List[Tuple[str, str]]) -> List[st
 def replan_agent(state: PaperFinderState):
     system_prompt = """
     You are a senior researcher. The goal is to update a plan for your research assistant to find the most relevant papers to the user query.
-    You are provided with a user query, the current plan to retrieve the papers and the steps your assistant has completed.
+    You are provided with a user query, the retrieved papers, the current plan to retrieve the papers and the steps your assistant has completed.
     You need to first determine if goal is achieved or not. If the goal is achieved, you can stop and mark the goal as achieved.
     If the goal is not achieved, you need to update the plan to find the most relevant papers to the user query and return the new plan.
 
@@ -95,36 +97,38 @@ def replan_agent(state: PaperFinderState):
     2. Access to academic databases. This is helpful to find actual papers with metadata filters and keyword matching.
 
     Guidelines:
-    - You should first determine if the goal is achieved or not. If the goal is achieved, you can stop and mark the goal as achieved and leave the plan_steps, and plan_reasoning empty. If not you need to update the plan.
     - Think like a real researcher who would give different plans based on different scenarios:
         For example:
         - If the user query is about a general topic. You might want the assistant to use the general web search and then use the academic databases to find the most relevant papers.
         - If the user query is about a specific paper. You might want the assistant to use the academic database with certain keywords or metadata filters to search for that specific paper
-        If not you can use general web search or academic data database Find the anchor paper first
+    - Currently you don't have access to citation chase tool so the strategy of finding anchor paper and then performing citation chase is not gonna work.
     - The granularity of each step should be adequate for the assistant to finish within one execution.
     - Take into account the steps that your assistant has already completed and the results of those steps.
     - If you think the current plan is good enough, you can simply remove the steps that are already completed and keep the rest of the plan.
     - The completed steps should not be included in the new plan.
+    - Keep each step concise and to the point
     Limit the number of new steps to 2 or less.
-
     """
 
     paper_info_text = get_paper_info_text(state.get("papers", []))
-    user_query = state.get("optimized_query", "")
+    user_query = f"""
+    User query: {state['optimized_query']}
+    """
+
     user_prompt = f"""
     User query: {user_query}
-    Papers information:
-    {paper_info_text}
+    Current Plan: {state.get("plan_steps", [])}
     Completed Steps: 
     {completed_steps_formatter(state.get("completed_steps", []))}
-    Current Plan: {state.get("plan_steps", [])}
+    Papers information:
+    {paper_info_text}
     """
 
     class ReplanDecision(BaseModel):
         goal_achieved: bool = Field(description="Whether the goal is achieved or not")
         
     class ReplanPlan(BaseModel):
-        plan_reasoning: str = Field(description="The reasoning for the new plan")
+        plan_reasoning: str = Field(description="The reasoning for the new plan generated")
         plan_steps: List[str] = Field(description="The steps of the new plan")
     
     class Replan(BaseModel):
@@ -175,6 +179,7 @@ def search_agent_node(state: SearchAgentState):
     You are provided with two methods to find papers:
     1. General web search. This is important to understand the general context for the user query and find the most relevant papers from the web.
     2. Access to academic databases. This is helpful to find actual papers with metadata filters and keyword matching.
+    You can also use tools to check what 
     Call the tools that you think are most relevant to the current step of the plan.
     Reflect on the past action, and completed steps and decide what to do next to finish the goal.
     If you think you got the desired results, you can stop and summarize what you found.
@@ -213,7 +218,7 @@ def rerank_node(state: SearchAgentState):
             
             user_query = state.get("optimized_query", "")
             reranked_results = ranker.rank(query=user_query, docs=docs)
-            top_matches = reranked_results.top_k(k=10)
+            top_matches = reranked_results.top_k(k=MAX_PAPER_LIST_LENGTH)
             
             final_papers = []
             for match in top_matches:
@@ -221,7 +226,7 @@ def rerank_node(state: SearchAgentState):
                 final_papers.append(paper_obj)
         except Exception as e:
             print(f"Reranking failed in tool: {e}")
-            final_papers = deduped_list[:10]
+            final_papers = deduped_list[:MAX_PAPER_LIST_LENGTH]
     else:
         final_papers = []
     

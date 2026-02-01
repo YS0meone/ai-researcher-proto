@@ -24,6 +24,8 @@ def get_user_query(messages: list) -> str:
     
 def get_paper_info_text(papers: list[S2Paper]) -> str:
     """Get the text of the papers."""
+    if not papers:
+        return "No papers found yet"
     return "\n".join([f"Paper {paper.paperId}: {paper.title}\nAuthors: {paper.authors}\nPublication Date: {paper.publicationDate}\nAbstract: {paper.abstract}\n" for paper in papers])
 
 def setup_langsmith():

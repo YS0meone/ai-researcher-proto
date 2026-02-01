@@ -506,37 +506,61 @@ def get_paper_abstract(arxiv_ids: List[str]) -> Dict[str, str]:
 class S2SearchPapersRequest(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     runtime: ToolRuntime
-    reasoning: str = Field(..., description="Think in step by step and provide the reasoning for the search query and other arguments")
-    query: str = Field(..., description="Plain-text search query string.")
+    reasoning: str = Field(..., description="Explain your search strategy: what are you looking for and why this query formulation?")
+    query: str = Field(
+        ...,
+        description="""Search query for Semantic Scholar. Follow these guidelines for effective queries:
+
+QUERY LENGTH: Keep queries SHORT (2-5 keywords). The API matches against title and abstract.
+- BAD: "What are the methods for improving efficiency of large language models through quantization and pruning techniques?"
+- GOOD: "language model quantization pruning"
+
+PHRASE MATCHING: Use quotes for exact multi-word phrases.
+- "graph neural network" (matches exact phrase)
+- "large language model" efficiency (phrase + keyword)
+
+BOOLEAN OPERATORS: Use + (AND) and | (OR) to combine terms.
+- transformer + attention (both required)
+- BERT | RoBERTa | GPT (any of these)
+- "neural network" + (pruning | quantization) (phrase AND either term)
+
+KEYWORD STRATEGIES:
+- Use technical terms, not natural language questions
+- Include acronyms AND full names: "LLM" | "large language model"
+- Prefer nouns over verbs: "image classification" not "classifying images"
+- Omit common words: the, a, an, of, for, in, on
+
+EXAMPLES:
+- Finding a specific paper: Use match_title=True with the paper title
+- Methodology papers: "transformer attention mechanism"
+- Survey papers: "survey" + "deep learning"
+- Recent techniques: Use year filter instead of adding "recent" to query"""
+    )
     year: str = Field(
-        None, 
-        description="Restrict results to the given range of publication years (e.g. '2020', '2018-2020')."
+        None,
+        description="Filter by publication year range. Examples: '2023' (single year), '2020-2024' (range). Use this instead of adding year terms to query."
     )
     venue: List[str] = Field(
-        None, 
-        description="Restrict results to one or more venue names (e.g. conference or journal names)."
+        None,
+        description="Filter by venue names (conferences/journals). Examples: ['NeurIPS', 'ICML', 'ACL']. Case-insensitive."
     )
     fields_of_study: List[str] = Field(
-        None, 
-        description="Restrict results to the given list of fields of study, using the s2FieldsOfStudy field (e.g. ['Computer Science', 'Mathematics'])."
+        None,
+        description="Filter by field. Options: 'Computer Science', 'Mathematics', 'Physics', 'Biology', 'Medicine', etc. Use for broad domain filtering."
     )
     publication_date_or_year: str = Field(
-        None, 
-        description=(
-            "Restrict results to the given range of publication date in the format "
-            "<start_date>:<end_date>, where dates are in the format "
-            "YYYY-MM-DD, YYYY-MM, or YYYY"
-        )
+        None,
+        description="Filter by date range in format 'YYYY-MM-DD:YYYY-MM-DD' or 'YYYY:YYYY'. Example: '2023-01-01:2024-12-31'"
     )
     min_citation_count: int = Field(
-        None, 
-        description="Restrict results to papers with at least this number of citations."
+        None,
+        description="Minimum citations required. Use to find influential papers (e.g., 100 for well-cited, 1000 for seminal works)."
     )
     match_title: bool = Field(
-        False, 
-        description="If true, retrieve a single paper whose title best matches the query."
+        False,
+        description="Set True to find ONE paper by exact title match. Use when you know the specific paper title."
     )
 
 @tool(
@@ -554,9 +578,33 @@ def s2_search_papers(
     match_title: bool = False,
 ):
     """
-    Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
-    and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
-    let the tool use the default values. 
+    Search academic papers using Semantic Scholar's database of 200M+ papers.
+
+    WHEN TO USE:
+    - Finding papers on a specific research topic
+    - Locating papers by methodology or technique
+    - Finding influential/highly-cited papers in a field
+    - Looking up a specific paper by title (use match_title=True)
+
+    QUERY BEST PRACTICES:
+    - Keep queries SHORT: 2-5 keywords, not full sentences
+    - Use quotes for phrases: "graph neural network"
+    - Use + for AND: transformer + efficiency
+    - Use | for OR: BERT | GPT | T5
+    - Combine with parentheses: "attention" + (vision | image)
+    - Use FILTERS (year, venue, min_citation_count) instead of adding filter words to query
+
+    EXAMPLES OF GOOD QUERIES:
+    - "knowledge distillation" + transformer
+    - "reinforcement learning" + robotics
+    - BERT | RoBERTa (to find papers on either)
+    - "graph neural network" + (node | link) + prediction
+
+    EXAMPLES OF BAD QUERIES (too long/natural language):
+    - "What are the recent advances in transformer architectures for NLP tasks?"
+    - "Papers about how to make neural networks more efficient using pruning"
+
+    Returns: List of papers with title, abstract, authors, year, and citation count.
     """
     # Get state from runtime (if available)
     state = runtime.state if runtime else {}
@@ -669,9 +717,13 @@ def get_paper_details(
 ) -> str:
     """
     Get the metadata of the papers in the paper list. Call it if you need to know the details of the papers in the paper list.
+
+    **When to use this tool:**
+    - When you want to check if certain paper in the paper list
+    - When you want to know what papers you already have to decide what to do next
     
     Returns:
-    The metadata of the papers in the paper list.
+    The metadata of all papers in the paper list.
     """
 
     state = runtime.state if runtime else {}

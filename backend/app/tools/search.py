@@ -556,7 +556,7 @@ def s2_search_papers(
     """
     Search papers using Semantic Scholar API. Supports filtering by year, venue, fields of study, publication date or year,
     and minimum citation count. The most important argument is the query. If the user does not mention other fields you can just
-    let use the  
+    let the tool use the default values. 
     """
     # Get state from runtime (if available)
     state = runtime.state if runtime else {}
@@ -585,43 +585,10 @@ def s2_search_papers(
                 update={"messages": [ToolMessage(content=f"Error searching for papers: {error_msg}", tool_call_id=tool_call_id)]}
             )
     
-    existing_papers = state.get("papers", [])
-    
-    all_papers = list(existing_papers) + list(new_results)
-    unique_papers = {p.paperId: p for p in all_papers}
-    deduped_list = list(unique_papers.values())
-    
-    if len(deduped_list) > 0:
-        try:
-            ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
-            docs = []
-            for paper in deduped_list:
-                content_text = f"Title: {paper.title}\nAbstract: {paper.abstract}\nAuthors: {paper.authors}"
-                docs.append(Document(
-                    text=content_text,
-                    doc_id=str(paper.paperId),
-                    metadata=paper.model_dump()
-                ))
-            
-            user_query = state.get("optimized_query", query)
-            reranked_results = ranker.rank(query=user_query, docs=docs)
-            top_matches = reranked_results.top_k(k=10)
-            
-            final_papers = []
-            for match in top_matches:
-                paper_obj = S2Paper.model_validate(match.document.metadata)
-                final_papers.append(paper_obj)
-        except Exception as e:
-            print(f"Reranking failed in tool: {e}")
-            final_papers = deduped_list[:10]
-    else:
-        final_papers = []
-    
-
     return Command(
-        update={"papers": final_papers, "messages": [
+        update={"new_papers": new_results, "messages": [
             ToolMessage(
-                content=f"I found {len(new_results)} new papers for your query, merged with existing {len(existing_papers)} papers, and reranked to {len(final_papers)} final papers.",
+                content=f"I found {len(new_results)} new papers for your query.",
                 tool_call_id=tool_call_id
                 )]}
     )
@@ -698,7 +665,7 @@ def tavily_research_overview(reasoning: str, query: str) -> str:
     
 @tool
 def get_paper_details(
-    runtime: Annotated[dict, InjectedState] = None,
+    runtime: ToolRuntime
 ) -> str:
     """
     Get the metadata of the papers in the paper list. Call it if you need to know the details of the papers in the paper list.

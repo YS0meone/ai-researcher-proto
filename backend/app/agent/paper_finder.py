@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from typing import List, Tuple, Annotated, Union
 from langchain.agents import create_agent, AgentState
 import operator
+from langgraph.prebuilt import tools_condition
 
 setup_langsmith()
 
@@ -27,7 +28,7 @@ tool_node = ToolNode(tools)
 MAX_ITER = 3
 
 model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
-search_agent_model = model.bind_tools(tools, parallel_tool_calls=False)
+search_agent_model = model.bind_tools(tools)
 
 def planner(state: PaperFinderState):
     system_prompt = """
@@ -45,7 +46,6 @@ def planner(state: PaperFinderState):
         - If the user query is about a specific paper. You might want the assistant to use the academic database with certain keywords or metadata filters to search for that specific paper
         If not you can use general web search or academic data database Find the anchor paper first
     - The granularity of each step should be adequate for the assistant to finish within one execution.
-    Think step by step and provide the reasoning for your plan.
     Limit the number of steps to 2 or less.
     """
 
@@ -151,8 +151,22 @@ def replan_agent(state: PaperFinderState):
             "plan_reasoning": "Continuing with adjusted plan due to replanning error"
         }
 
+class ClearItem(BaseModel):
+    """sentinel item to clear the list"""
+    pass
 
-def search_agent(state: PaperFinderState):
+def new_paper_reducer(current: list, update: list | ClearItem) -> list:
+    if isinstance(update, ClearItem):
+        return []
+    return current + update
+
+class SearchAgentState(AgentState):
+    optimized_query: str
+    papers: List[S2Paper]
+    plan_steps: List[str]
+    new_papers: Annotated[List[S2Paper], new_paper_reducer]
+
+def search_agent_node(state: SearchAgentState):
     search_query_prompt = """
     You are a senior research assistant who helps finding academic papers based on a user query.
     You are provided with a plan for your search from your mentor.
@@ -165,24 +179,71 @@ def search_agent(state: PaperFinderState):
     Reflect on the past action, and completed steps and decide what to do next to finish the goal.
     If you think you got the desired results, you can stop and summarize what you found.
     The summarization should be concise and to the point.
-    Never create parallel tool calls on the same tool.
-    Think step by step.
     """
 
-    iter = state.get("iter", 0)
-    plan_steps = state.get("plan_steps", [])
+    response = search_agent_model.invoke([
+        SystemMessage(content=search_query_prompt),
+        *state.get("messages", [])
+    ])
+    return {"messages": [response]}
+
+search_tool_node = ToolNode(tools)
+
+def rerank_node(state: SearchAgentState):
+    if len(state.get("new_papers", [])) == 0:
+        return {}
     
-    class SearchAgentState(AgentState):
-        optimized_query: str
-        papers: List[S2Paper]
-
-    # Handle empty plan_steps
-    if not plan_steps:
-        current_goal = "Search for relevant papers based on the user query"
+    existing_papers = state.get("papers", [])
+    
+    all_papers = list(existing_papers) + list(state.get("new_papers", []))
+    unique_papers = {p.paperId: p for p in all_papers}
+    deduped_list = list(unique_papers.values())
+    
+    if len(deduped_list) > 0:
+        try:
+            ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
+            docs = []
+            for paper in deduped_list:
+                content_text = f"Title: {paper.title}\nAbstract: {paper.abstract}\nAuthors: {paper.authors}"
+                docs.append(Document(
+                    text=content_text,
+                    doc_id=str(paper.paperId),
+                    metadata=paper.model_dump()
+                ))
+            
+            user_query = state.get("optimized_query", "")
+            reranked_results = ranker.rank(query=user_query, docs=docs)
+            top_matches = reranked_results.top_k(k=10)
+            
+            final_papers = []
+            for match in top_matches:
+                paper_obj = S2Paper.model_validate(match.document.metadata)
+                final_papers.append(paper_obj)
+        except Exception as e:
+            print(f"Reranking failed in tool: {e}")
+            final_papers = deduped_list[:10]
     else:
-        current_goal = plan_steps[0]
+        final_papers = []
+    
+    return {"papers": final_papers, "new_papers": ClearItem()}
 
-    search_agent = create_agent(model=search_agent_model, tools=tools, state_schema=SearchAgentState, system_prompt=search_query_prompt)
+search_graph = StateGraph(SearchAgentState)
+search_graph.add_node("search_agent", search_agent_node)
+search_graph.add_node("search_tool", search_tool_node)
+search_graph.add_node("rerank", rerank_node)
+search_graph.add_edge(START, "search_agent")
+search_graph.add_conditional_edges("search_agent", tools_condition, {
+        "tools": "search_tool", 
+        "__end__": END
+    })
+search_graph.add_edge("search_tool", "rerank")
+search_graph.add_edge("rerank", "search_agent")
+search_graph = search_graph.compile()
+
+def search_agent(state: PaperFinderState):
+    iter = state.get("iter", 0)
+
+    current_goal = state.get("plan_steps", [])[0]
 
     user_prompt = f"""
     User query: {state.get("optimized_query", "")}
@@ -190,14 +251,14 @@ def search_agent(state: PaperFinderState):
     Completed Steps: 
     {completed_steps_formatter(state.get("completed_steps", []))}
     """
-
     search_agent_state = {
         "optimized_query": state.get("optimized_query", ""),
+        "plan_steps": state.get("plan_steps", []),
         "papers": state.get("papers", []),
         "messages": [HumanMessage(content=user_prompt)]
     }
     
-    response = search_agent.invoke(search_agent_state)
+    response = search_graph.invoke(search_agent_state)
 
     if isinstance(response["messages"][-1].content, list):
         content = " ".join([item["text"] for item in response["messages"][-1].content])
@@ -205,8 +266,6 @@ def search_agent(state: PaperFinderState):
         content = response["messages"][-1].content
     else:
         content = str(response["messages"][-1].content)
-        print(type(content))
-        print(f"the content is: {content}")
     step_summary = (current_goal, content)
     return {"papers": response["papers"], "completed_steps": [step_summary], "iter": iter + 1}
 

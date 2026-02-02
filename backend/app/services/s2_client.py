@@ -63,3 +63,124 @@ class S2Client:
         for i in range(len(results)):
             papers.append(self.convert_to_s2_paper(results[i]))
         return papers
+    
+    def get_paper_citations(
+        self,
+        paper_id: str,
+        fields: list = None,
+        limit: int = 1000
+    ) -> List[dict]:
+        """
+        Get papers that cite the given paper (backward snowball).
+        
+        Args:
+            paper_id: The paper ID (paperId or CorpusId)
+            fields: List of fields to retrieve for each citing paper
+            limit: Maximum number of citations to retrieve
+            
+        Returns:
+            List of paper dictionaries (raw data from S2 API)
+        """
+        if fields is None:
+            fields = [
+                'paperId', 'corpusId', 'title', 'abstract', 'authors',
+                'year', 'citationCount', 'influentialCitationCount',
+                'isInfluential'
+            ]
+        try:
+            # Get citations using the semanticscholar library
+            # Note: limit parameter is page size, not total results
+            citations = self.client.get_paper_citations(
+                paper_id=paper_id,
+                fields=fields,
+                limit=1000  # Max 1000 per page
+            )
+            
+            # Convert to list of raw data dicts, respecting the limit
+            # Note: API returns structure with 'citingPaper' containing the actual paper data
+            result = []
+            for i, citation in enumerate(citations):
+                if i >= limit:  # Stop after reaching the desired limit
+                    break
+                
+                # Extract the citing paper data from the nested structure
+                if citation and hasattr(citation, 'raw_data'):
+                    raw = citation.raw_data
+                    # The actual paper data is in 'citingPaper' field
+                    if isinstance(raw, dict) and 'citingPaper' in raw:
+                        result.append(raw['citingPaper'])
+                    else:
+                        result.append(raw)
+                elif isinstance(citation, dict):
+                    # Handle if it's already a dict
+                    if 'citingPaper' in citation:
+                        result.append(citation['citingPaper'])
+                    else:
+                        result.append(citation)
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error fetching citations for {paper_id}: {e}")
+            return []
+    
+    def get_paper_references(
+        self,
+        paper_id: str,
+        fields: list = None,
+        limit: int = 1000
+    ) -> List[dict]:
+        """
+        Get papers that the given paper cites/references (forward snowball).
+        
+        Args:
+            paper_id: The paper ID (paperId or CorpusId)
+            fields: List of fields to retrieve for each referenced paper
+            limit: Maximum number of references to retrieve
+            
+        Returns:
+            List of paper dictionaries (raw data from S2 API)
+        """
+        if fields is None:
+            fields = [
+                'paperId', 'corpusId', 'title', 'abstract', 'authors',
+                'year', 'citationCount', 'influentialCitationCount',
+                'isInfluential'
+            ]
+        
+        try:
+            # Get references using the semanticscholar library
+            # Note: limit parameter is page size, not total results
+            references = self.client.get_paper_references(
+                paper_id=paper_id,
+                fields=fields,
+                limit=min(limit, 1000)  # Max 1000 per page
+            )
+            
+            # Convert to list of raw data dicts, respecting the limit
+            # Note: API returns structure with 'citedPaper' containing the actual paper data
+            result = []
+            for i, reference in enumerate(references):
+                if i >= limit:  # Stop after reaching the desired limit
+                    break
+                
+                # Extract the cited paper data from the nested structure
+                if reference and hasattr(reference, 'raw_data'):
+                    raw = reference.raw_data
+                    # The actual paper data is in 'citedPaper' field
+                    if isinstance(raw, dict) and 'citedPaper' in raw:
+                        result.append(raw['citedPaper'])
+                    else:
+                        result.append(raw)
+                elif isinstance(reference, dict):
+                    # Handle if it's already a dict
+                    if 'citedPaper' in reference:
+                        result.append(reference['citedPaper'])
+                    else:
+                        result.append(reference)
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error fetching references for {paper_id}: {e}")
+            return []

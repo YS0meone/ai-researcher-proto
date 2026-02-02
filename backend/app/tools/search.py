@@ -734,3 +734,327 @@ def get_paper_details(
     paper_info_text = get_paper_info_text(papers)
     return paper_info_text
 
+
+class ForwardSnowballRequest(BaseModel):
+    """Request schema for forward snowball search."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    runtime: ToolRuntime
+    reasoning: str = Field(
+        ..., 
+        description="Explain why you want to find papers that these seed papers cite/reference"
+    )
+    seed_paper_ids: List[str] = Field(
+        ...,
+        description="List of Semantic Scholar paper IDs to use as seed papers. These are the papers whose references you want to explore."
+    )
+    top_k: int = Field(
+        10,
+        description="Number of top referenced papers to return (default: 10, max: 50)"
+    )
+
+
+@tool(args_schema=ForwardSnowballRequest)
+def forward_snowball(
+    runtime: ToolRuntime,
+    reasoning: str,
+    seed_paper_ids: List[str],
+    top_k: int = 10
+):
+    """
+    Forward Snowball: Find papers that the specified seed papers CITE (their references).
+    
+    **What this does:**
+    - Takes a list of paper IDs as seed papers
+    - Fetches all papers that these seed papers reference/cite
+    - Scores candidates based on citation count and how many seeds cite them
+    - Returns the top-k most relevant referenced papers
+    
+    **When to use:**
+    - You want to explore the foundational papers that influenced specific papers
+    - You're tracing back to the original/parent works
+    - You want to understand what prior work specific papers build upon
+    
+    **Example:**
+    For papers about "GPT-3" and "BERT", this will find papers like 
+    "Attention is All You Need" (Transformer paper) that they cite.
+    
+    Args:
+        reasoning: Why you want to find referenced papers
+        seed_paper_ids: List of Semantic Scholar paper IDs (e.g., ["paperId1", "paperId2"])
+        top_k: Number of top papers to return (default: 10, max: 50)
+        
+    Returns:
+        Top-k most relevant papers cited by the seed papers
+    """
+    tool_call_id = runtime.tool_call_id
+    
+    if not seed_paper_ids:
+        return Command(
+            update={"messages": [ToolMessage(
+                content="No seed paper IDs provided. Please specify which papers to use for citation chasing.",
+                tool_call_id=tool_call_id
+            )]}
+        )
+    
+    top_k = min(max(1, top_k), 50)  # Clamp between 1 and 50
+    
+    try:
+        s2_client = S2Client()
+        
+        # Fetch references for all seed papers
+        all_references = {}  # corpus_id -> {paper_data, num_seeds_citing: int}
+        
+        for paper_id in seed_paper_ids:
+            try:
+                references = s2_client.get_paper_references(
+                    paper_id=paper_id,
+                    fields=["paperId", "corpusId", "title", "abstract", "authors", 
+                           "year", "citationCount", "influentialCitationCount"]
+                )
+                
+                if not references:
+                    continue
+                
+                for ref in references:
+                    corpus_id = ref.get("corpusId")
+                    if not corpus_id:
+                        continue
+                    
+                    if corpus_id not in all_references:
+                        all_references[corpus_id] = {
+                            "paper": ref,
+                            "num_seeds_citing": 0
+                        }
+                    
+                    all_references[corpus_id]["num_seeds_citing"] += 1
+                        
+            except Exception as e:
+                continue
+        
+        if not all_references:
+            return Command(
+                update={"messages": [ToolMessage(
+                    content=f"Could not find references for the {len(seed_paper_ids)} seed papers.",
+                    tool_call_id=tool_call_id
+                )]}
+            )
+        
+        # Score and sort candidates
+        scored_candidates = []
+        for corpus_id, data in all_references.items():
+            paper = data["paper"]
+            num_seeds = data["num_seeds_citing"]
+            citation_count = paper.get("citationCount", 0)
+            
+            # Simple scoring: prioritize papers cited by multiple seeds and highly cited
+            score = num_seeds * 10.0 + min(citation_count / 100, 10.0)
+            
+            scored_candidates.append({"score": score, "paper": paper})
+        
+        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+        top_candidates = scored_candidates[:top_k]
+        
+        # Convert to S2Paper objects
+        result_papers = []
+        for candidate in top_candidates:
+            paper_data = candidate["paper"]
+            try:
+                s2_paper = S2Paper(
+                    paperId=paper_data.get("paperId", ""),
+                    corpusId=paper_data.get("corpusId"),
+                    title=paper_data.get("title"),
+                    abstract=paper_data.get("abstract"),
+                    authors=paper_data.get("authors"),
+                    year=paper_data.get("year"),
+                    citationCount=paper_data.get("citationCount"),
+                    influentialCitationCount=paper_data.get("influentialCitationCount"),
+                    url=paper_data.get("url", f"https://www.semanticscholar.org/paper/{paper_data.get('paperId', '')}")
+                )
+                result_papers.append(s2_paper)
+            except Exception:
+                continue
+        
+        return Command(
+            update={
+                "new_papers": result_papers,
+                "messages": [ToolMessage(
+                    content=f"Found {len(result_papers)} papers cited by the {len(seed_paper_ids)} seed papers.",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
+        
+    except Exception as e:
+        return Command(
+            update={"messages": [ToolMessage(
+                content=f"Error during forward snowball: {str(e)}",
+                tool_call_id=tool_call_id
+            )]}
+        )
+
+
+class BackwardSnowballRequest(BaseModel):
+    """Request schema for backward snowball search."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    runtime: ToolRuntime
+    reasoning: str = Field(
+        ..., 
+        description="Explain why you want to find papers that cite these seed papers"
+    )
+    seed_paper_ids: List[str] = Field(
+        ...,
+        description="List of Semantic Scholar paper IDs to use as seed papers. These are the papers whose citations you want to explore."
+    )
+    top_k: int = Field(
+        10,
+        description="Number of top citing papers to return (default: 10, max: 50)"
+    )
+
+
+@tool(args_schema=BackwardSnowballRequest)
+def backward_snowball(
+    runtime: ToolRuntime,
+    reasoning: str,
+    seed_paper_ids: List[str],
+    top_k: int = 10
+):
+    """
+    Backward Snowball: Find papers that CITE the specified seed papers.
+    
+    **What this does:**
+    - Takes a list of paper IDs as seed papers
+    - Fetches all papers that cite these seed papers
+    - Scores candidates based on citation count, recency, and how many seeds they cite
+    - Returns the top-k most relevant citing papers
+    
+    **When to use:**
+    - You want to find recent work building on specific foundational papers
+    - You're looking for "child" papers that extend or apply seed papers
+    - You want to discover how specific papers have been used or cited
+    
+    **Example:**
+    For the "Attention is All You Need" paper, this will find papers like 
+    "BERT", "GPT-3", and other transformer-based models that cite it.
+    
+    Args:
+        reasoning: Why you want to find citing papers
+        seed_paper_ids: List of Semantic Scholar paper IDs (e.g., ["paperId1", "paperId2"])
+        top_k: Number of top papers to return (default: 10, max: 50)
+        
+    Returns:
+        Top-k most relevant papers that cite the seed papers
+    """
+    tool_call_id = runtime.tool_call_id
+    
+    if not seed_paper_ids:
+        return Command(
+            update={"messages": [ToolMessage(
+                content="No seed paper IDs provided. Please specify which papers to use for citation chasing.",
+                tool_call_id=tool_call_id
+            )]}
+        )
+    
+    top_k = min(max(1, top_k), 50)  # Clamp between 1 and 50
+    
+    try:
+        s2_client = S2Client()
+        
+        # Fetch citations for all seed papers
+        all_citations = {}  # corpus_id -> {paper_data, num_seeds_cited: int}
+        
+        for paper_id in seed_paper_ids:
+            try:
+                citations = s2_client.get_paper_citations(
+                    paper_id=paper_id,
+                    fields=["paperId", "corpusId", "title", "abstract", "authors", 
+                           "year", "citationCount", "influentialCitationCount"]
+                )
+                
+                if not citations:
+                    continue
+                
+                for cite in citations:
+                    corpus_id = cite.get("corpusId")
+                    if not corpus_id:
+                        continue
+                    
+                    if corpus_id not in all_citations:
+                        all_citations[corpus_id] = {
+                            "paper": cite,
+                            "num_seeds_cited": 0
+                        }
+                    
+                    all_citations[corpus_id]["num_seeds_cited"] += 1
+                        
+            except Exception as e:
+                continue
+        
+        if not all_citations:
+            return Command(
+                update={"messages": [ToolMessage(
+                    content=f"Could not find citations for the {len(seed_paper_ids)} seed papers.",
+                    tool_call_id=tool_call_id
+                )]}
+            )
+        
+        # Score and sort candidates
+        scored_candidates = []
+        current_year = 2026
+        
+        for corpus_id, data in all_citations.items():
+            paper = data["paper"]
+            num_seeds = data["num_seeds_cited"]
+            citation_count = paper.get("citationCount", 0)
+            year = paper.get("year", 2000)
+            
+            # Recency bonus for papers from last 3 years
+            recency_bonus = max(0, (year - (current_year - 3)) / 3.0) * 2.0
+            
+            # Simple scoring: prioritize papers citing multiple seeds, highly cited, and recent
+            score = num_seeds * 10.0 + min(citation_count / 100, 10.0) + recency_bonus
+            
+            scored_candidates.append({"score": score, "paper": paper})
+        
+        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+        top_candidates = scored_candidates[:top_k]
+        
+        # Convert to S2Paper objects
+        result_papers = []
+        for candidate in top_candidates:
+            paper_data = candidate["paper"]
+            try:
+                s2_paper = S2Paper(
+                    paperId=paper_data.get("paperId", ""),
+                    corpusId=paper_data.get("corpusId"),
+                    title=paper_data.get("title"),
+                    abstract=paper_data.get("abstract"),
+                    authors=paper_data.get("authors"),
+                    year=paper_data.get("year"),
+                    citationCount=paper_data.get("citationCount"),
+                    influentialCitationCount=paper_data.get("influentialCitationCount"),
+                    url=paper_data.get("url", f"https://www.semanticscholar.org/paper/{paper_data.get('paperId', '')}")
+                )
+                result_papers.append(s2_paper)
+            except Exception:
+                continue
+        
+        return Command(
+            update={
+                "new_papers": result_papers,
+                "messages": [ToolMessage(
+                    content=f"Found {len(result_papers)} papers that cite the {len(seed_paper_ids)} seed papers.",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
+        
+    except Exception as e:
+        return Command(
+            update={"messages": [ToolMessage(
+                content=f"Error during backward snowball: {str(e)}",
+                tool_call_id=tool_call_id
+            )]}
+        )
+

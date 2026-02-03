@@ -3,7 +3,7 @@ from langchain.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, END, StateGraph
 from app.agent.states import PaperFinderState
 from langgraph.prebuilt import ToolNode
-from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details
+from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details, forward_snowball, backward_snowball
 from app.core.config import settings
 from app.agent.utils import setup_langsmith, get_paper_info_text
 from rerankers import Reranker, Document
@@ -19,7 +19,7 @@ setup_langsmith()
 
 ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
 
-tools = [tavily_research_overview, s2_search_papers, get_paper_details]
+tools = [tavily_research_overview, s2_search_papers, get_paper_details, forward_snowball, backward_snowball]
 tool_node = ToolNode(tools)
 
 MAX_ITER = 3
@@ -33,18 +33,25 @@ def planner(state: PaperFinderState):
     You are a senior researcher. The goal is to create a plan for your research assistant to find the most relevant papers to the user query.
     You are provided with a user query and potentially a list of papers known to the research assistant.
     You need to plan the best way to find the most relevant papers to the user query.
-    There are two different methods for your assistant to find papers:
-    1. General web search. This is important to understand the general context for the user query and find the most relevant papers from the web.
-    2. Access to academic databases. This is helpful to find actual papers with metadata filters and keyword matching.
+    
+    Your assistant has access to multiple search methods:
+    1. General web search: Understand context and find famous/seminal papers
+    2. Academic database search: Find papers with keyword queries and filters (year, venue, citations, etc.)
+    3. Citation chasing:
+       - Forward snowball: Find papers that seed papers cite (their foundations/references)
+       - Backward snowball: Find papers that cite seed papers (recent work building on them)
 
     Guidelines:
     - Think like a real researcher who would give different plans based on different scenarios:
-        For example:
-        - If the user query is about a general topic. You might want the assistant to use the general web search and then use the academic databases to find the most relevant papers.
-        - If the user query is about a specific paper. You might want the assistant to use the academic database with certain keywords or metadata filters to search for that specific paper
-    - Currently you don't have access to citation chase tool so the strategy of finding anchor paper and then performing citation chase is not gonna work.
-    - The granularity of each step should be adequate for the assistant to finish within one execution.
+        Examples:
+        - General topic: Start with web search for context, then academic database search
+        - Specific paper: Use academic database with title/author filters
+        - Foundational work: Find key papers, then use forward snowball to trace their references
+        - Recent advances: Find seminal papers, then use backward snowball for recent citations
+    - Citation chasing is powerful when you've identified good seed papers
+    - The granularity of each step should be adequate for the assistant to finish within one execution
     - Keep each step concise and to the point
+    
     Limit the number of steps to 3 or less.
     """
 
@@ -92,21 +99,25 @@ def replan_agent(state: PaperFinderState):
     You need to first determine if goal is achieved or not. If the goal is achieved, you can stop and mark the goal as achieved.
     If the goal is not achieved, you need to update the plan to find the most relevant papers to the user query and return the new plan.
 
-    There are two different methods for your assistant to find papers:
-    1. General web search. This is important to understand the general context for the user query and find the most relevant papers from the web.
-    2. Access to academic databases. This is helpful to find actual papers with metadata filters and keyword matching.
+    Your assistant has access to multiple search methods:
+    1. General web search: Understand context and find famous/seminal papers
+    2. Academic database search: Find papers with keyword queries and filters
+    3. Citation chasing:
+       - Forward snowball: Find papers that seed papers cite (foundations/references)
+       - Backward snowball: Find papers that cite seed papers (recent work)
 
     Guidelines:
     - Think like a real researcher who would give different plans based on different scenarios:
-        For example:
-        - If the user query is about a general topic. You might want the assistant to use the general web search and then use the academic databases to find the most relevant papers.
-        - If the user query is about a specific paper. You might want the assistant to use the academic database with certain keywords or metadata filters to search for that specific paper
-    - Currently you don't have access to citation chase tool so the strategy of finding anchor paper and then performing citation chase is not gonna work.
-    - The granularity of each step should be adequate for the assistant to finish within one execution.
-    - Take into account the steps that your assistant has already completed and the results of those steps.
-    - If you think the current plan is good enough, you can simply remove the steps that are already completed and keep the rest of the plan.
-    - The completed steps should not be included in the new plan.
+        Examples:
+        - General topic: Web search for context, then academic database
+        - Specific paper: Use academic database with filters
+        - If good papers found: Consider citation chasing to expand the paper set
+    - The granularity of each step should be adequate for the assistant to finish within one execution
+    - Take into account the steps that your assistant has already completed and the results of those steps
+    - If you think the current plan is good enough, simply remove completed steps and keep the rest
+    - The completed steps should not be included in the new plan
     - Keep each step concise and to the point
+    
     Limit the number of new steps to 2 or less.
     """
 
@@ -176,14 +187,29 @@ def search_agent_node(state: SearchAgentState):
     You are provided with a plan for your search from your mentor.
 
     Your goal is to utilize the provided tools to finish the current step of the plan.
-    You are provided with two methods to find papers:
-    1. General web search. This is important to understand the general context for the user query and find the most relevant papers from the web.
-    2. Access to academic databases. This is helpful to find actual papers with metadata filters and keyword matching.
-    You can also use tools to check what 
-    Call the tools that you think are most relevant to the current step of the plan.
-    Reflect on the past action, and completed steps and decide what to do next to finish the goal.
-    If you think you got the desired results, you can stop and summarize what you found.
-    The summarization should be concise and to the point.
+    
+    You have access to multiple search methods:
+    1. General web search (tavily_research_overview): Use this when the research topic is general or unfamiliar. 
+       This helps you understand the research landscape and identify famous/seminal papers you shouldn't miss.
+    
+    2. Academic database search (s2_search_papers): Search Semantic Scholar's database of 200M+ papers.
+       Use keyword queries, filters by year, venue, citation count, etc. to find relevant papers.
+    
+    3. Citation chasing tools:
+       - forward_snowball: Find papers that your seed papers CITE (their references/foundations)
+       - backward_snowball: Find papers that CITE your seed papers (recent work building on them)
+       Use these when you've found good papers and want to explore their citation network.
+    
+    4. Paper details (get_paper_details): Check what papers are currently in your paper list.
+    
+    Strategy tips:
+    - Start with web search if topic is unfamiliar to get context
+    - Use academic database for targeted searches with filters
+    - Use citation chasing to expand from good seed papers you've found
+    - Check paper details to avoid redundant searches
+    
+    Reflect on past actions and completed steps to decide what to do next.
+    If you have sufficient results, stop and provide a concise summary of what you found.
     """
 
     response = search_agent_model.invoke([

@@ -12,12 +12,11 @@ from pydantic import BaseModel, Field
 from typing import List, Tuple, Annotated, Union
 from langchain.agents import AgentState
 from langgraph.prebuilt import tools_condition
-import os
 
 
 setup_langsmith()
 
-ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
+ranker = Reranker("cohere", api_key=settings.COHERE_API_KEY)
 
 tools = [tavily_research_overview, s2_search_papers, get_paper_details, forward_snowball, backward_snowball]
 tool_node = ToolNode(tools)
@@ -232,7 +231,6 @@ def rerank_node(state: SearchAgentState):
     
     if len(deduped_list) > 0:
         try:
-            ranker = Reranker("cohere", api_key=os.environ.get("COHERE_API_KEY"))
             docs = []
             for paper in deduped_list:
                 content_text = f"Title: {paper.title}\nAbstract: {paper.abstract}\nAuthors: {paper.authors}"

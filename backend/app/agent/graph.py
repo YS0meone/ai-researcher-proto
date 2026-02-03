@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from app.db.schema import S2Paper
 from app.agent.paper_finder import paper_finder
+from app.agent.paper_finder_fast import paper_finder_fast_graph
 from app.agent.qa import qa_graph
 from typing import Tuple
 from langgraph.graph import StateGraph
@@ -11,7 +12,7 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import START, END
 from app.agent.utils import setup_langsmith
 from pydantic import BaseModel, Field
-from langchain.messages import SystemMessage, AIMessage, ToolMessage
+from langchain.messages import SystemMessage, AIMessage, ToolMessage, HumanMessage
 from app.tools.search import get_paper_details
 from langgraph.types import Command
 from langchain.tools import ToolRuntime
@@ -31,8 +32,8 @@ def find_papers(runtime: ToolRuntime) -> Command:
     user_query = runtime.state.get("optimized_query", "")
     papers = runtime.state.get("papers", [])
 
-    state = {"optimized_query": user_query, "papers": papers}
-    result = paper_finder.invoke(state)
+    state = {"optimized_query": user_query, "papers": papers, "messages": [HumanMessage(content=user_query)]}
+    result = paper_finder_fast_graph.invoke(state)
     return Command(
         update={"papers": result["papers"], 
         "messages": [ToolMessage(content=f"I found {len(result['papers'])} papers for your query.", tool_call_id=runtime.tool_call_id)]
@@ -44,12 +45,12 @@ def answer_question(runtime: ToolRuntime) -> str:
     Answer the user question based on the current papers.
     Trust the result from the tools would answer the user question based on the papers and forward the answer to the user.
     """
-    user_query = runtime.state.get("optimized_query", "")
-    papers = runtime.state.get("papers", [])
-    state = {"messages": [{"role": "user", "content": user_query}], "papers": papers}
-    result = qa_graph.invoke(state)
-    return result["messages"][-1].content
-
+    # user_query = runtime.state.get("optimized_query", "")
+    # papers = runtime.state.get("papers", [])
+    # state = {"messages": [{"role": "user", "content": user_query}], "papers": papers}
+    # result = qa_graph.invoke(state)
+    # return result["messages"][-1].content
+    return "I'm sorry, I can't answer that question."
 
 def query_clarification(state: State):
     system_prompt = f"""

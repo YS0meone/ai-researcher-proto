@@ -47,8 +47,9 @@ def new_paper_reducer(current: list, update: list | ClearItem) -> list:
 class SearchAgentState(AgentState):
     optimized_query: str
     papers: List[S2Paper]
-    plan_steps: List[str]
+    iter: int
     new_papers: Annotated[List[S2Paper], new_paper_reducer]
+
 
 
 def search_agent_node(state: SearchAgentState):
@@ -148,7 +149,12 @@ def rerank_node(state: SearchAgentState):
     else:
         final_papers = []
     
-    return {"papers": final_papers, "new_papers": ClearItem()}
+    return {"papers": final_papers, "new_papers": ClearItem(), "iter": state.get("iter", 0) + 1}
+
+def my_tools_condition(state: SearchAgentState):
+    if state.get("iter", 0) > 3:
+        return "__end__"
+    return tools_condition(state)
 
 paper_finder_fast_graph = StateGraph(SearchAgentState)
 paper_finder_fast_graph.add_node("search_agent", search_agent_node)
@@ -156,7 +162,7 @@ paper_finder_fast_graph.add_node("search_tool", search_tool_node)
 paper_finder_fast_graph.add_node("rerank", rerank_node)
 
 paper_finder_fast_graph.add_edge(START, "search_agent")
-paper_finder_fast_graph.add_conditional_edges("search_agent", tools_condition, {"tools": "search_tool", "__end__": END})
+paper_finder_fast_graph.add_conditional_edges("search_agent", my_tools_condition, {"tools": "search_tool", "__end__": END})
 paper_finder_fast_graph.add_edge("search_tool", "rerank")
 paper_finder_fast_graph.add_edge("rerank", "search_agent")
 paper_finder_fast_graph = paper_finder_fast_graph.compile()

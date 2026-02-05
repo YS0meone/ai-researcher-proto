@@ -1,5 +1,6 @@
-from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict, Tuple
+from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict, Tuple, Sequence
 from langgraph.graph.message import add_messages
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 import operator
 from langchain.agents import AgentState
 from app.db.schema import S2Paper
@@ -13,7 +14,8 @@ class State(AgentState):
 
     optimized_query: Optional[str]  # Query optimized for search
     is_clear: Optional[bool]
-    papers: List[S2Paper] 
+    papers: List[S2Paper]
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]  # UI messages channel 
 
     # plan_steps: List[str]
     # plan_reasoning: str

@@ -1,3 +1,4 @@
+import uuid
 from langchain_core.tools import tool
 from app.db.schema import S2Paper
 from app.agent.paper_finder import paper_finder
@@ -16,8 +17,8 @@ from langchain.messages import SystemMessage, AIMessage, ToolMessage, HumanMessa
 from app.tools.search import get_paper_details
 from langgraph.types import Command
 from langchain.tools import ToolRuntime
-from langchain.agents import create_agent
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer, push_ui_message
+from langgraph.prebuilt import ToolNode, tools_condition
 
 
 setup_langsmith()
@@ -36,6 +37,9 @@ def find_papers(runtime: ToolRuntime) -> Command:
 
     state = {"optimized_query": user_query, "papers": papers, "messages": [HumanMessage(content=user_query)]}
     result = paper_finder_fast_graph.invoke(state)
+    papers = result["papers"]
+    
+    # Return papers via Command - UI message will be pushed from agent node
     return Command(
         update={"papers": result["papers"], 
         "messages": [ToolMessage(content=f"I found {len(result['papers'])} papers for your query.", tool_call_id=runtime.tool_call_id)]
@@ -52,7 +56,7 @@ def answer_question(runtime: ToolRuntime) -> str:
     # state = {"messages": [{"role": "user", "content": user_query}], "papers": papers}
     # result = qa_graph.invoke(state)
     # return result["messages"][-1].content
-    return "I'm sorry, I can't answer that question."
+    return "Yes there are papers that answer the user's question."
 
 def query_clarification(state: State):
     system_prompt = f"""
@@ -113,37 +117,101 @@ def should_clarify(state: State):
     return route
 
 supervisor_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY, parallel_tool_calls=False)
-tools = [find_papers, answer_question, get_paper_details]
+tools = [find_papers, get_paper_details]
 
 supervisor_prompt = """
 You are a supervisor for a research assistant system.
-You are provided with three tools: find_papers, answer_question and get_paper_details.
+You are provided with two tools: find_papers, and get_paper_details.
 The find_papers tool is used to find papers related to the user query.
-The answer_question tool is used to answer the user question based on the papers.
 The get_paper_details tool is used to get the details of a paper currently in the paper list.
-
-You need to decide which tool to use based on the user query and the current papers you have.
-You need to use the find_papers tool if the current papers you have is not enough to answer the user question.
-You need to call the answer_question tool if the current papers you have is enough to answer the user question.
-You should only call one tool at a time.
-You should blindly trust the find_papers tool would find the most relevant papers and the answer_question tool would answer the user question based on the papers.
-Sometimes you only need to call one tool. 
-For example, if the user's query is purely about finding papers that interest them, you can just call the find_paper tool
-If the user's query can be answered directly using the current paper list, you can just call the answer question tool
-After you call the answer_question tool, you should forward the tool call result to the user and end the conversation.
+If you don't have enough papers, you should call the find_papers tool.
+And then you should call the get_paper_details tool to get the details of the papers.
+You can only call the find papers tool once.
 """
 
-supervisor_node = create_agent(supervisor_model, tools, state_schema=State, system_prompt=supervisor_prompt)
+# Bind tools to the supervisor model
+supervisor_model_with_tools = supervisor_model.bind_tools(tools)
 
 
+def supervisor_agent_node(state: State):
+    """
+    Supervisor agent node that:
+    1. Checks if last message is a ToolMessage from find_papers
+    2. If so, extracts papers and calls push_ui_message
+    3. Otherwise, invokes the model to decide next action
+    """
+    messages = state["messages"]
+    last_message = messages[-1] if messages else None
+    
+    # Check if last message is a ToolMessage from find_papers tool
+    if isinstance(last_message, ToolMessage):
+        print(f"📝 [SUPERVISOR NODE] Detected ToolMessage from tool: {getattr(last_message, 'name', 'unknown')}")
+        
+        # Check if this was from find_papers tool
+        # We can check by looking at the ToolMessage content or by checking state
+        papers = state.get("papers", [])
+        
+        if papers and "found" in last_message.content.lower() and "papers" in last_message.content.lower():
+            print(f"🎨 [SUPERVISOR NODE] Pushing UI message with {len(papers)} papers")
+            
+            try:
+                # Convert S2Paper objects to dicts if needed
+                papers_data = [p.model_dump() if hasattr(p, 'model_dump') else p for p in papers]
+                
+                # Create AI message
+                ai_message = AIMessage(
+                    id=str(uuid.uuid4()),
+                    content=f"I found {len(papers)} papers for your query. Let me get more details about them.",
+                )
+                
+                # Push UI message FROM NODE (officially supported!)
+                ui_msg = push_ui_message(
+                    "papers", 
+                    {"papers": papers_data}, 
+                    message=ai_message
+                )
+                
+                print(f"✅ [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
+                
+                # Return AI message to continue conversation
+                return {"messages": [ai_message]}
+            
+            except Exception as e:
+                print(f"❌ [SUPERVISOR NODE] Failed to push UI message: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # Normal case: invoke model with system prompt
+    print("🤖 [SUPERVISOR NODE] Invoking supervisor model")
+    response = supervisor_model_with_tools.invoke(
+        [SystemMessage(content=supervisor_prompt)] + messages
+    )
+    return {"messages": [response]}
+
+
+supervisor_tool_node = ToolNode(tools)
+
+
+# Build the graph with decomposed supervisor
 graph = StateGraph(State)
 graph.add_node("query_clarification", query_clarification)
 graph.add_node("query_optimization", query_optimization)
-graph.add_node("supervisor", supervisor_node)
+graph.add_node("supervisor_agent", supervisor_agent_node)
+graph.add_node("supervisor_tools", supervisor_tool_node)
 
 graph.add_edge(START, "query_clarification")
 graph.add_conditional_edges("query_clarification", should_clarify, {"optimize": "query_optimization", "end": END})
-graph.add_edge("query_optimization", "supervisor")
-graph.add_edge("supervisor", END)
+graph.add_edge("query_optimization", "supervisor_agent")
 
-graph = graph.compile()
+# Add conditional edges for the supervisor agent loop
+graph.add_conditional_edges(
+    "supervisor_agent",
+    tools_condition,
+    {
+        "tools": "supervisor_tools",
+        "__end__": END
+    }
+)
+graph.add_edge("supervisor_tools", "supervisor_agent")
+
+graph = graph.compile().with_config({"recursion_limit": 100})

@@ -16,8 +16,8 @@ class State(AgentState):
     is_clear: Optional[bool]
     papers: List[S2Paper]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]  # UI messages channel 
+    plan_steps: List[Literal["answer_question", "find_papers", "end"]]
 
-    # plan_steps: List[str]
     # plan_reasoning: str
     
     # search_queries: List[str]     # Queries executed so far

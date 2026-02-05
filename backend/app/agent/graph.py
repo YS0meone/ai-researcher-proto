@@ -19,7 +19,8 @@ from langgraph.types import Command
 from langchain.tools import ToolRuntime
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer, push_ui_message
 from langgraph.prebuilt import ToolNode, tools_condition
-
+from typing import Literal, List
+from app.agent.utils import get_paper_info_text
 
 setup_langsmith()
 logger = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def query_clarification(state: State):
     response = msg.tool_calls[0]["args"]
 
     if "clarification" not in response:
-        return {"messages": [AIMessage(content="The user's query is clear.")], "is_clear": True}
+        return {"is_clear": True}
     else:
         return {"messages": [AIMessage(content=response["clarification"])], "is_clear": False}
 
@@ -132,7 +133,20 @@ You can only call the find papers tool once.
 # Bind tools to the supervisor model
 supervisor_model_with_tools = supervisor_model.bind_tools(tools)
 
-
+@tool
+def generate_plan(plan_choice: Literal["find_then_qa", "find_only", "qa_only"]) -> str:
+    """
+    Generate a plan for the research assistant to follow.
+    Args: 
+    - plan_choice: The plan you are going to follow.
+        - "qa_only": Choose this plan if you think the current paper list is enough to answer the user's question
+        - "find_then_qa": Choose this plan if user have a specific question about some papers that is not present in the current paper list
+        - "find_only": Choose this plan if the user is interested in finding certain papers and does not ask any specific question about them
+    Returns:
+    - plan: The plan you are going to follow.
+    """
+    return ""
+    
 def supervisor_agent_node(state: State):
     """
     Supervisor agent node that:
@@ -140,54 +154,117 @@ def supervisor_agent_node(state: State):
     2. If so, extracts papers and calls push_ui_message
     3. Otherwise, invokes the model to decide next action
     """
+
     messages = state["messages"]
     last_message = messages[-1] if messages else None
     
-    # Check if last message is a ToolMessage from find_papers tool
+    # ========================================
+    # POST-PROCESSING: Handle tool results
+    # ========================================
     if isinstance(last_message, ToolMessage):
-        print(f"📝 [SUPERVISOR NODE] Detected ToolMessage from tool: {getattr(last_message, 'name', 'unknown')}")
+        print(f"📝 [SUPERVISOR NODE] Post-processing ToolMessage from: {last_message.name}")
         
-        # Check if this was from find_papers tool
-        # We can check by looking at the ToolMessage content or by checking state
-        papers = state.get("papers", [])
-        
-        if papers and "found" in last_message.content.lower() and "papers" in last_message.content.lower():
-            print(f"🎨 [SUPERVISOR NODE] Pushing UI message with {len(papers)} papers")
+        if last_message.name == "find_papers":
+            papers = state.get("papers", [])
             
-            try:
-                # Convert S2Paper objects to dicts if needed
-                papers_data = [p.model_dump() if hasattr(p, 'model_dump') else p for p in papers]
+            if papers and "found" in last_message.content.lower() and "papers" in last_message.content.lower():
+                print(f"🎨 [SUPERVISOR NODE] Pushing UI message with {len(papers)} papers")
                 
-                # Create AI message
-                ai_message = AIMessage(
-                    id=str(uuid.uuid4()),
-                    content=f"I found {len(papers)} papers for your query. Let me get more details about them.",
-                )
+                try:
+                    # Convert S2Paper objects to dicts if needed
+                    papers_data = [p.model_dump() if hasattr(p, 'model_dump') else p for p in papers]
+                    
+                    # Create AI message
+                    ai_message = AIMessage(
+                        id=str(uuid.uuid4()),
+                        content=f"I found {len(papers)} papers for your query.",
+                    )
+                    
+                    # Push UI message FROM NODE (officially supported!)
+                    ui_msg = push_ui_message(
+                        "papers", 
+                        {"papers": papers_data}, 
+                        message=ai_message
+                    )
+                    
+                    print(f"✅ [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
+                    
+                    # Return AI message to state and continue to next plan step
+                    return {"messages": [ai_message]}
                 
-                # Push UI message FROM NODE (officially supported!)
-                ui_msg = push_ui_message(
-                    "papers", 
-                    {"papers": papers_data}, 
-                    message=ai_message
-                )
+                except Exception as e:
+                    print(f"❌ [SUPERVISOR NODE] Failed to push UI message: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue to next plan step even if UI push fails
+                    return {}
+            else:
+                # No papers or unexpected message format
+                print(f"⚠️ [SUPERVISOR NODE] find_papers returned but no papers found")
+                return {}
                 
-                print(f"✅ [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
-                
-                # Return AI message to continue conversation
-                return {"messages": [ai_message]}
+        elif last_message.name == "answer_question":
+            print("✅ [SUPERVISOR NODE] answer_question completed")
+            return {"messages": [AIMessage(content=last_message.content)]}
             
-            except Exception as e:
-                print(f"❌ [SUPERVISOR NODE] Failed to push UI message: {e}")
-                import traceback
-                traceback.print_exc()
+        else:
+            print(f"⚠️ [SUPERVISOR NODE] Unknown tool call: {last_message.name}")
+            return {}
     
-    # Normal case: invoke model with system prompt
-    print("🤖 [SUPERVISOR NODE] Invoking supervisor model")
-    response = supervisor_model_with_tools.invoke(
-        [SystemMessage(content=supervisor_prompt)] + messages
-    )
-    return {"messages": [response]}
+    # ========================================
+    # PLAN GENERATION & EXECUTION
+    # ========================================
+    plan = state.get("plan_steps", [])
+    
+    # Generate plan if it doesn't exist
+    if len(plan) == 0:
+        print("📋 [SUPERVISOR NODE] Generating new plan")
+        plan_prompt = f"""
+        You are a supervisor for a research assistant system.
+        Generate a plan using the provided tool with provided context.
+        """
+        planner = supervisor_model_with_tools.bind_tools([generate_plan], tool_choice="generate_plan")
+        planner_context = f"""
+        User query: {state.get("optimized_query", "")}
+        Current papers: {get_paper_info_text(state.get("papers", []))}
+        """
+        response = planner.invoke([
+            SystemMessage(content=plan_prompt),
+            HumanMessage(content=planner_context)
+        ])
+        plan_choice = response.tool_calls[0]["args"]["plan_choice"]
+        
+        if plan_choice == "qa_only":
+            plan = ["answer_question", "end"]
+        elif plan_choice == "find_then_qa":
+            plan = ["find_papers", "answer_question", "end"]
+        elif plan_choice == "find_only":
+            plan = ["find_papers", "end"]
+        else:
+            raise ValueError(f"Invalid plan choice: {plan_choice}")
+        
+        print(f"📋 [SUPERVISOR NODE] Generated plan: {plan}")
+    
+    # Execute next step in plan
+    if not plan:
+        print("⚠️ [SUPERVISOR NODE] Plan is empty, ending")
+        return {}
+    
+    current_step = plan.pop(0)
+    print(f"🎯 [SUPERVISOR NODE] Executing plan step: {current_step}")
+    
+    if current_step == "end":
+        print("✅ [SUPERVISOR NODE] Plan completed")
+        return {}
+    
+    # Create manual tool call for the next step
+    manual_tool_call = {
+        "name": current_step,
+        "args": {},
+        "id": str(uuid.uuid4())
+    }
 
+    return {"messages": [AIMessage(content="", tool_calls=[manual_tool_call])], "plan_steps": plan}
 
 supervisor_tool_node = ToolNode(tools)
 

@@ -1,233 +1,328 @@
-from typing import List, Dict, Any, Optional, Literal
 from langchain.chat_models import init_chat_model
-from langchain.messages import SystemMessage, HumanMessage
-from langgraph.graph import StateGraph, START, END
+from langchain.messages import HumanMessage, SystemMessage
+from langgraph.graph import START, END, StateGraph
+from app.agent.states import PaperFinderState
 from langgraph.prebuilt import ToolNode
+from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details, forward_snowball, backward_snowball
 from app.core.config import settings
-from app.tools.search import (
-    hybrid_search_papers,
-    semantic_search_papers,
-    keyword_search_papers,
-    # vector_search_papers,
-)
-from app.agent.prompts import (
-    RerankingPrompts,
-    SearchAgentPrompts,
-)
+from app.agent.utils import setup_langsmith, get_paper_info_text
+from rerankers import Reranker, Document
+from app.db.schema import S2Paper
 from pydantic import BaseModel, Field
-import logging
-from app.agent.states import State
-from app.agent.utils import get_user_query, setup_langsmith
+from typing import List, Tuple, Annotated, Union
+from langchain.agents import AgentState
+from langgraph.prebuilt import tools_condition
 
-logger = logging.getLogger(__name__)
+
 setup_langsmith()
-paper_finder_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
+ranker = Reranker("cohere", api_key=settings.COHERE_API_KEY)
 
-class QueryGeneration(BaseModel):
-    """Structured output for query generation."""
-    queries: List[str] = Field(max_length=4)
+tools = [tavily_research_overview, s2_search_papers, get_paper_details, forward_snowball, backward_snowball]
+tool_node = ToolNode(tools)
 
+MAX_ITER = 3
+MAX_PAPER_LIST_LENGTH = 20
 
-class SynthesisDecision(BaseModel):
-    """Structured output for synthesis planning."""
-    needs_deep_search: bool
-    reasoning: str
-    search_query: Optional[str] = None
+model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+search_agent_model = model.bind_tools(tools)
 
+def planner(state: PaperFinderState):
+    system_prompt = """
+    You are a senior researcher. The goal is to create a plan for your research assistant to find the most relevant papers to the user query.
+    You are provided with a user query and potentially a list of papers known to the research assistant.
+    You need to plan the best way to find the most relevant papers to the user query.
+    
+    Your assistant has access to multiple search methods:
+    1. General web search: Understand context and find famous/seminal papers
+    2. Academic database search: Find papers with keyword queries and filters (year, venue, citations, etc.)
+    3. Citation chasing:
+       - Forward snowball: Find papers that seed papers cite (their foundations/references)
+       - Backward snowball: Find papers that cite seed papers (recent work building on them)
 
-class SearchToolCall(BaseModel):
-    """Structured output for a single search tool call."""
-    tool_name: Literal["hybrid_search_papers", "semantic_search_papers",
-                       "keyword_search_papers", "vector_search_papers",
-                       "search_papers_by_category"]
-    query: str
-    limit: int = 15
-    reasoning: str
-
-
-class SearchPlan(BaseModel):
-    """Structured output for search planning."""
-    tool_calls: List[SearchToolCall] = Field(min_length=1, max_length=5)
-    strategy: str
-
-
-class RerankingResult(BaseModel):
-    """Structured output for paper reranking."""
-    order: List[str]
-    coverage_score: float = Field(ge=0.0, le=1.0)
-    brief_reasoning: Optional[str] = None
-
-
-def search_agent(state: State) -> Dict:
+    Guidelines:
+    - Think like a real researcher who would give different plans based on different scenarios:
+        Examples:
+        - General topic: Start with web search for context, then academic database search
+        - Specific paper: Use academic database with title/author filters
+        - Foundational work: Find key papers, then use forward snowball to trace their references
+        - Recent advances: Find seminal papers, then use backward snowball for recent citations
+    - Citation chasing is powerful when you've identified good seed papers
+    - The granularity of each step should be adequate for the assistant to finish within one execution
+    - Keep each step concise and to the point
+    
+    Limit the number of steps to 3 or less.
     """
-    Unified search agent that generates queries and selects tools.
-    Returns ONE AIMessage with MULTIPLE tool_calls to avoid LangGraph tool response mismatch.
+
+    paper_info_text = get_paper_info_text(state.get("papers", []))
+    user_query = f"""
+    User query: {state['optimized_query']}
     """
-    user_msg = get_user_query(state["messages"])
 
-    # Get search plan with structured output
-    # prompt = SearchAgentPrompts.format_planning(
-    #     user_msg=user_msg,
-    #     search_queries=state.get("search_queries", [])
-    # )
+    user_prompt = f"""
+    User query: {user_query}
+    Papers information:
+    {paper_info_text}
+    """
+    
+    class Plan(BaseModel):
+        plan_reasoning: str = Field(description="The reasoning for the plan you generated")
+        plan_steps: List[str] = Field(description="The steps of the plan")
 
-    # Bind tools and get ONE AIMessage with MULTIPLE tool_calls
-    tool_bound = paper_finder_model.bind_tools([
-        hybrid_search_papers,
-        semantic_search_papers,
-        keyword_search_papers,
-        # vector_search_papers,
-    ])
+    structured_model = model.with_structured_output(Plan)
 
-    # Invoke with explicit tool call instructions
-    ai_message = tool_bound.invoke([
-        SystemMessage(
-            content="You are a paper finder agent. Find the most relevant papers for the user query by calling the appropriate tools."),
-        HumanMessage(content=user_msg)
-    ])
+    try:
+        response = structured_model.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ])
+        return {"plan_steps": response.plan_steps, "plan_reasoning": response.plan_reasoning}
+    except Exception as e:
+        print(f"Error in planner: {e}")
+        return {
+            "plan_steps": [
+                "Use web search to understand the research topic",
+                "Search academic database for relevant papers",
+                "Review and refine search results"
+            ],
+            "plan_reasoning": "Using default plan due to planning error"
+        }
 
-    return {
-        "messages": [ai_message]
-    }
+def completed_steps_formatter(completed_steps: List[Tuple[str, str]]) -> List[str]:
+    return ["\n".join([f"Task:{task}\nResult:{result}" for task, result in completed_steps])]
 
+def replan_agent(state: PaperFinderState):
+    system_prompt = """
+    You are a senior researcher. The goal is to update a plan for your research assistant to find the most relevant papers to the user query.
+    You are provided with a user query, the retrieved papers, the current plan to retrieve the papers and the steps your assistant has completed.
+    You need to first determine if goal is achieved or not. If the goal is achieved, you can stop and mark the goal as achieved.
+    If the goal is not achieved, you need to update the plan to find the most relevant papers to the user query and return the new plan.
 
-def merge_and_rerank(state: State) -> Dict:
-    # Collect the last tool outputs from messages
-    import sys
-    import json
-    candidates: List[Dict[str, Any]] = []
+    Your assistant has access to multiple search methods:
+    1. General web search: Understand context and find famous/seminal papers
+    2. Academic database search: Find papers with keyword queries and filters
+    3. Citation chasing:
+       - Forward snowball: Find papers that seed papers cite (foundations/references)
+       - Backward snowball: Find papers that cite seed papers (recent work)
 
-    for idx, m in enumerate(state["messages"]):
-        msg_type = getattr(m, 'type', None) or (
-            m.get('type') if isinstance(m, dict) else None)
-        msg_class = m.__class__.__name__
+    Guidelines:
+    - Think like a real researcher who would give different plans based on different scenarios:
+        Examples:
+        - General topic: Web search for context, then academic database
+        - Specific paper: Use academic database with filters
+        - If good papers found: Consider citation chasing to expand the paper set
+    - The granularity of each step should be adequate for the assistant to finish within one execution
+    - Take into account the steps that your assistant has already completed and the results of those steps
+    - If you think the current plan is good enough, simply remove completed steps and keep the rest
+    - The completed steps should not be included in the new plan
+    - Keep each step concise and to the point
+    
+    Limit the number of new steps to 2 or less.
+    """
 
-        # Check if this is a tool message
-        is_tool = (isinstance(m, dict) and m.get("type") == "tool") or (
-            hasattr(m, "type") and m.type == "tool") or msg_class == "ToolMessage"
-        if is_tool:
-            content = m.get("content") if isinstance(
-                m, dict) else getattr(m, "content", None)
+    paper_info_text = get_paper_info_text(state.get("papers", []))
+    user_query = f"""
+    User query: {state['optimized_query']}
+    """
 
-            # Try to extract results
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("arxiv_id"):
-                        candidates.append(item)
-            elif isinstance(content, str):
-                # Tool content might be JSON string
-                try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, list):
-                        for item in parsed:
-                            if isinstance(item, dict) and item.get("arxiv_id"):
-                                candidates.append(item)
-                except:
-                    pass
+    user_prompt = f"""
+    User query: {user_query}
+    Current Plan: {state.get("plan_steps", [])}
+    Completed Steps: 
+    {completed_steps_formatter(state.get("completed_steps", []))}
+    Papers information:
+    {paper_info_text}
+    """
 
-    papers = state.get("papers", [])
-    print(f"Total candidates found: {len(candidates)}", file=sys.stderr)
-    print(f"Existing papers in state: {len(papers)}", file=sys.stderr)
+    class ReplanDecision(BaseModel):
+        goal_achieved: bool = Field(description="Whether the goal is achieved or not")
+        
+    class ReplanPlan(BaseModel):
+        plan_reasoning: str = Field(description="The reasoning for the new plan generated")
+        plan_steps: List[str] = Field(description="The steps of the new plan")
+    
+    class Replan(BaseModel):
+        replan_reply: Union[ReplanDecision, ReplanPlan] = Field(description="The reply from the replan agent, either a decision to stop or a new plan")
 
-    # Deduplicate by arxiv_id and keep best score
-    seen = {p["arxiv_id"]: p for p in papers}
-    for c in candidates:
-        aid = c["arxiv_id"]
-        prev = seen.get(aid)
-        if not prev:
-            seen[aid] = c
+    structured_model = model.with_structured_output(Replan)
+
+    try:
+        response = structured_model.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ])
+        if isinstance(response.replan_reply, ReplanDecision):
+            return {"goal_achieved": response.replan_reply.goal_achieved}
         else:
-            def best(a, b, key):
-                sa, sb = a.get(key), b.get(key)
-                if sa is None:
-                    return b
-                if sb is None:
-                    return a
-                return a if sa >= sb else b
-            seen[aid] = best(prev, c, "search_score" if "search_score" in c else (
-                "similarity_score" if "similarity_score" in c else "text_score"))
+            return {"goal_achieved": False, "plan_steps": response.replan_reply.plan_steps, "plan_reasoning": response.replan_reply.plan_reasoning}
+    except Exception as e:
+        print(f"Error in replan_agent: {e}")
+        # Fallback to existing plan
+        current_plan = state.get("plan_steps", [])
+        return {
+            "goal_achieved": False,
+            "plan_steps": current_plan[1:] if len(current_plan) > 1 else ["Search for more relevant papers"],
+            "plan_reasoning": "Continuing with adjusted plan due to replanning error"
+        }
 
-    merged = list(seen.values())[:100]
+class ClearItem(BaseModel):
+    """sentinel item to clear the list"""
+    pass
 
-    print(f"Merged papers count: {len(merged)}", file=sys.stderr)
+def new_paper_reducer(current: list, update: list | ClearItem) -> list:
+    if isinstance(update, ClearItem):
+        return []
+    return current + update
 
-    # Rerank with LLM (title+abstract snippet) and compute coverage heuristic
-    user_msg = get_user_query(state["messages"])
-    short_list = merged[:30]
+class SearchAgentState(AgentState):
+    optimized_query: str
+    papers: List[S2Paper]
+    plan_steps: List[str]
+    new_papers: Annotated[List[S2Paper], new_paper_reducer]
 
-    print(
-        f"Short list for reranking: {len(short_list)} papers", file=sys.stderr)
+def search_agent_node(state: SearchAgentState):
+    search_query_prompt = """
+    You are a senior research assistant who helps finding academic papers based on a user query.
+    You are provided with a plan for your search from your mentor.
 
-    if len(short_list) == 0:
-        print("WARNING: No papers to rerank! Returning empty results.", file=sys.stderr)
-        return {"papers": [], "coverage_score": 0.0}
+    Your goal is to utilize the provided tools to finish the current step of the plan.
+    
+    You have access to multiple search methods:
+    1. General web search (tavily_research_overview): Use this when the research topic is general or unfamiliar. 
+       This helps you understand the research landscape and identify famous/seminal papers you shouldn't miss.
+    
+    2. Academic database search (s2_search_papers): Search Semantic Scholar's database of 200M+ papers.
+       Use keyword queries, filters by year, venue, citation count, etc. to find relevant papers.
+    
+    3. Citation chasing tools:
+       - forward_snowball: Find papers that your seed papers CITE (their references/foundations)
+       - backward_snowball: Find papers that CITE your seed papers (recent work building on them)
+       Use these when you've found good papers and want to explore their citation network.
+    
+    4. Paper details (get_paper_details): Check what papers are currently in your paper list.
+    
+    Strategy tips:
+    - Start with web search if topic is unfamiliar to get context
+    - Use academic database for targeted searches with filters
+    - Use citation chasing to expand from good seed papers you've found
+    - Check paper details to avoid redundant searches
+    
+    Reflect on past actions and completed steps to decide what to do next.
+    If you have sufficient results, stop and provide a concise summary of what you found.
+    """
 
-    prompt = RerankingPrompts.format_reranking(
-        user_msg=user_msg,
-        candidates=short_list
-    )
-
-    structured_model = paper_finder_model.with_structured_output(
-        RerankingResult)
-    result = structured_model.invoke([
-        SystemMessage(content=RerankingPrompts.SYSTEM),
-        *state["messages"],
-        HumanMessage(content=prompt)
+    response = search_agent_model.invoke([
+        SystemMessage(content=search_query_prompt),
+        *state.get("messages", [])
     ])
+    return {"messages": [response]}
 
-    order = result.order
-    coverage = result.coverage_score
+search_tool_node = ToolNode(tools)
 
-    # Fallback if no valid order returned
-    if not order:
-        print("WARNING: No valid order returned, using default", file=sys.stderr)
-        order = [p.get("arxiv_id") for p in short_list]
+def rerank_node(state: SearchAgentState):
+    if len(state.get("new_papers", [])) == 0:
+        return {}
+    
+    existing_papers = state.get("papers", [])
+    
+    all_papers = list(existing_papers) + list(state.get("new_papers", []))
+    unique_papers = {p.paperId: p for p in all_papers}
+    deduped_list = list(unique_papers.values())
+    
+    if len(deduped_list) > 0:
+        try:
+            docs = []
+            for paper in deduped_list:
+                content_text = f"Title: {paper.title}\nAbstract: {paper.abstract}\nAuthors: {paper.authors}"
+                docs.append(Document(
+                    text=content_text,
+                    doc_id=str(paper.paperId),
+                    metadata=paper.model_dump()
+                ))
+            
+            user_query = state.get("optimized_query", "")
+            reranked_results = ranker.rank(query=user_query, docs=docs)
+            top_matches = reranked_results.top_k(k=MAX_PAPER_LIST_LENGTH)
+            
+            final_papers = []
+            for match in top_matches:
+                paper_obj = S2Paper.model_validate(match.document.metadata)
+                final_papers.append(paper_obj)
+        except Exception as e:
+            print(f"Reranking failed in tool: {e}")
+            final_papers = deduped_list[:MAX_PAPER_LIST_LENGTH]
+    else:
+        final_papers = []
+    
+    return {"papers": final_papers, "new_papers": ClearItem()}
 
-    id_to_p = {p["arxiv_id"]: p for p in merged}
-    reranked = [id_to_p[i] for i in order if i in id_to_p] + \
-        [p for p in merged if p["arxiv_id"] not in set(order)]
+search_graph = StateGraph(SearchAgentState)
+search_graph.add_node("search_agent", search_agent_node)
+search_graph.add_node("search_tool", search_tool_node)
+search_graph.add_node("rerank", rerank_node)
+search_graph.add_edge(START, "search_agent")
+search_graph.add_conditional_edges("search_agent", tools_condition, {
+        "tools": "search_tool", 
+        "__end__": END
+    })
+search_graph.add_edge("search_tool", "rerank")
+search_graph.add_edge("rerank", "search_agent")
+search_graph = search_graph.compile()
 
-    print(f"Final reranked papers: {len(reranked[:50])}", file=sys.stderr)
+def search_agent(state: PaperFinderState):
+    iter = state.get("iter", 0)
 
-    return {"papers": reranked[:50], "coverage_score": coverage, "messages": [HumanMessage(content=f"Reranked {len(reranked[:50])} papers, coverage: {coverage:.2f}")]}
+    current_goal = state.get("plan_steps", [])[0]
+
+    user_prompt = f"""
+    User query: {state.get("optimized_query", "")}
+    Current Goal: {current_goal}
+    Completed Steps: 
+    {completed_steps_formatter(state.get("completed_steps", []))}
+    """
+    search_agent_state = {
+        "optimized_query": state.get("optimized_query", ""),
+        "plan_steps": state.get("plan_steps", []),
+        "papers": state.get("papers", []),
+        "messages": [HumanMessage(content=user_prompt)]
+    }
+    
+    response = search_graph.invoke(search_agent_state)
+
+    if isinstance(response["messages"][-1].content, list):
+        content = " ".join([item["text"] for item in response["messages"][-1].content])
+    elif isinstance(response["messages"][-1].content, str):
+        content = response["messages"][-1].content
+    else:
+        content = str(response["messages"][-1].content)
+    step_summary = (current_goal, content)
+    return {"papers": response["papers"], "completed_steps": [step_summary], "iter": iter + 1}
 
 
-def decide_next(state: State):
-    """Decide whether to continue searching or synthesize results."""
-    coverage = state.get("coverage_score", 0.0)
-    iter_count = state.get("iter", 0)
-    max_iters = state.get("max_iters", 3)
+def should_clarify(state: PaperFinderState):
+    is_clear = state.get("is_clear", True)
+    route = "optimize" if is_clear else "end"
+    print(f"[DEBUG] should_clarify: is_clear={is_clear}, routing to '{route}'")
+    return route
 
-    if coverage >= 0.65 or iter_count + 1 >= max_iters:
-        return "synthesize"
-    return "search_more"
+def should_continue(state: PaperFinderState):
+    last = state["messages"][-1]
+    return "tools" if hasattr(last, "tool_calls") and last.tool_calls else "end"
 
+def should_reply(state: PaperFinderState):
+    goal_achieved = state.get("goal_achieved", False)
+    iter = state.get("iter", 0)
+    return END if goal_achieved or iter >= MAX_ITER else "search_agent"
 
-def increment_iter(state: State) -> Dict:
-    return {"iter": state.get("iter", 0) + 1}
+paper_finder_builder = StateGraph(PaperFinderState)
+paper_finder_builder.add_node("planner", planner)
+paper_finder_builder.add_node("replan_agent", replan_agent)
+paper_finder_builder.add_node("search_agent", search_agent)
+paper_finder_builder.add_node("tools", tool_node)
 
+paper_finder_builder.add_edge(START, "planner")
+paper_finder_builder.add_edge("planner", "search_agent")
+paper_finder_builder.add_edge("search_agent", "replan_agent")
+paper_finder_builder.add_conditional_edges("replan_agent", should_reply)
 
-pf_graph_builder = StateGraph(State)
-pf_graph_builder.add_node("search_agent", search_agent)
-pf_graph_builder.add_node("tools", ToolNode([
-    hybrid_search_papers,
-    semantic_search_papers,
-    keyword_search_papers,
-    # vector_search_papers,
-]))
-# pf_graph_builder.add_node("merge_and_rerank", merge_and_rerank)
-# pf_graph_builder.add_node("increment_iter", increment_iter)
-
-pf_graph_builder.add_edge(START, "search_agent")
-
-pf_graph_builder.add_edge("search_agent", "tools")
-pf_graph_builder.add_edge("tools", END)
-
-# pf_graph_builder.add_conditional_edges("merge_and_rerank", decide_next, {
-#     "search_more": "increment_iter",
-#     "synthesize": END,
-# })
-# pf_graph_builder.add_edge("increment_iter", "search_agent")
-
-pf_graph = pf_graph_builder.compile()
+paper_finder = paper_finder_builder.compile()

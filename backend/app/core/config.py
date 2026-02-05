@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     AGENT_MODEL_NAME: str
     EVAL_MODEL_NAME: str
 
+    TAVILY_API_KEY: str
+    COHERE_API_KEY: str
+    
     DATABASE_URL: str
     DATABASE_ASYNC_URL: str
     DATABASE_POOL_SIZE: int
@@ -78,6 +81,8 @@ class Settings(BaseSettings):
     QDRANT_VECTOR_SIZE: int
     QDRANT_COLLECTION: str
     QDRANT_DISTANCE: str
+
+    S2_API_KEY: str
 
     @property 
     def database_config(self) -> DatabaseConfig:

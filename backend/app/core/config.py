@@ -31,6 +31,10 @@ class QdrantConfig(BaseModel):
     distance: str
     output_dir: str
 
+class CeleryConfig(BaseModel):
+    broker_url: str
+    result_backend: str
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
@@ -84,6 +88,9 @@ class Settings(BaseSettings):
 
     S2_API_KEY: str
 
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+
     @property 
     def database_config(self) -> DatabaseConfig:
         return DatabaseConfig(
@@ -123,6 +130,13 @@ class Settings(BaseSettings):
             collection=self.QDRANT_COLLECTION,
             distance=self.QDRANT_DISTANCE,
             output_dir=self.LOADER_OUTPUT_DIR,
+        )
+
+    @property
+    def celery_config(self) -> CeleryConfig:
+        return CeleryConfig(
+            broker_url=self.CELERY_BROKER_URL,
+            result_backend=self.CELERY_RESULT_BACKEND,
         )
 
 settings = Settings()

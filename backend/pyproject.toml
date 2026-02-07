@@ -39,4 +39,6 @@ dependencies = [
     "semanticscholar>=0.8.0",
     "rerankers>=0.10.0",
     "langchain-tavily>=0.2.17",
+    "celery[redis]>=5.4.0",
+    "redis>=5.0.0",
 ]

@@ -1,4 +1,5 @@
 import re
+import requests
 
 from langchain_core.documents import Document
 from app.core.config import QdrantConfig
@@ -7,7 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 from qdrant_client.http.models import Distance, VectorParams
 from langchain_huggingface import HuggingFaceEmbeddings
-from app.db.schema import ArxivPaper
+from app.db.schema import ArxivPaper, S2Paper
 import arxiv
 from pathlib import Path
 import logging
@@ -112,7 +113,98 @@ class QdrantService:
 
         self.vector_store.add_documents(docs)
         logging.info(f"Added {len(papers)} papers to Qdrant")
-    
+
+    # ============================
+    # S2Paper ingestion methods
+    # ============================
+
+    def _download_s2_pdf(self, paper: S2Paper) -> str:
+        """Download open-access PDF for an S2Paper.
+        
+        Returns:
+            The file path of the downloaded PDF.
+        
+        Raises:
+            ValueError: If no open-access PDF URL is available or download fails.
+        """
+        if not paper.openAccessPdf or not paper.openAccessPdf.get("url"):
+            raise ValueError(f"No open-access PDF URL for paper {paper.paperId}")
+
+        pdf_url = paper.openAccessPdf["url"]
+        safe_title = re.sub(r'[<>:"/\\|?*]', '_', (paper.title or paper.paperId).replace(" ", "_"))
+        file_name = f"{safe_title}.pdf"
+
+        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+        file_path = Path(self.config.output_dir) / file_name
+
+        response = requests.get(pdf_url, timeout=60)
+        response.raise_for_status()
+
+        file_path.write_bytes(response.content)
+        logger.info(f"Downloaded S2 PDF for paper {paper.paperId} to {file_path}")
+        return str(file_path)
+
+    def _s2_paper_metadata(self, paper: S2Paper) -> dict:
+        """Build a JSON-serializable metadata dict from an S2Paper."""
+        data = paper.model_dump(mode="json")
+        # Ensure paperId is also stored under 'id' for consistent filtering
+        data["id"] = paper.paperId
+        return data
+    def add_s2_paper(self, paper: S2Paper) -> int:
+        """Ingest an S2Paper by downloading its open-access PDF, parsing with
+        GROBID, and storing the resulting chunks in Qdrant.
+
+        Returns:
+            Number of document chunks stored.
+
+        Raises:
+            ValueError: If no PDF URL is available or the PDF yields no chunks.
+        """
+        self.empty_pdf_folder()
+        self._download_s2_pdf(paper)
+
+        loader = GenericLoader.from_filesystem(
+            self.config.output_dir,
+            glob="*",
+            suffixes=[".pdf"],
+            parser=GrobidParser(segment_sentences=False),
+        )
+        docs = loader.load()
+        if not docs:
+            raise ValueError(f"GROBID produced no chunks for paper {paper.paperId}")
+
+        metadata = self._s2_paper_metadata(paper)
+        for doc in docs:
+            doc.metadata.update(metadata)
+
+        self.vector_store.add_documents(docs)
+        logger.info(f"Added S2 paper {paper.paperId} to Qdrant ({len(docs)} chunks)")
+        return len(docs)
+
+    def add_s2_paper_abstract_only(self, paper: S2Paper) -> int:
+        """Fallback ingestion: embed title + abstract as a single document
+        when no open-access PDF is available.
+
+        Returns:
+            Number of document chunks stored (always 1).
+        """
+        content_parts = []
+        if paper.title:
+            content_parts.append(paper.title)
+        if paper.abstract:
+            content_parts.append(paper.abstract)
+
+        if not content_parts:
+            raise ValueError(f"Paper {paper.paperId} has neither title nor abstract")
+
+        content = "\n\n".join(content_parts)
+        metadata = self._s2_paper_metadata(paper)
+
+        doc = Document(page_content=content, metadata=metadata)
+        self.vector_store.add_documents([doc])
+        logger.info(f"Added S2 paper {paper.paperId} abstract-only to Qdrant")
+        return 1
+
     def search(self, query: str, k: int = 10, score_threshold: float = None) -> list[tuple[ArxivPaper, float]]:
         """
         Search for papers relevant to the query.

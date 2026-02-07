@@ -5,5 +5,8 @@
       "agent": "./app/agent/graph.py:graph"
     },
     "env": ".env",
-    "image_distro": "wolfi"
+    "image_distro": "wolfi",
+    "http": {
+      "app": "./app/webapp/app.py:app"
+    }
   }

@@ -1,12 +1,3 @@
-"""
-QA Agent Module - Agentic RAG for answering questions about selected papers.
-
-This module implements:
-1. Vector search within user-selected papers to retrieve relevant segments
-2. Question answering grounded in the retrieved evidence
-3. Iterative refinement if initial retrieval is insufficient
-"""
-
 from typing import Dict, List, Any, Optional
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage

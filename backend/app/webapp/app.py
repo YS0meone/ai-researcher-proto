@@ -1,4 +1,7 @@
+import asyncio
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.db.schema import S2Paper
@@ -7,10 +10,15 @@ from app.celery_app import celery_app
 
 app = FastAPI()
 
+# Add CORS middleware to allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins in development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ---------------------
-# Request / Response models
-# ---------------------
 
 class IngestRequest(BaseModel):
     """POST body for /ingest."""
@@ -33,9 +41,10 @@ class TaskStatus(BaseModel):
     result: dict | None = None
 
 
-# ---------------------
-# Endpoints
-# ---------------------
+def _send_ingest_task(paper_dict: dict):
+    """Synchronous helper — keeps Celery proxy resolution off the event loop."""
+    return ingest_paper_task.delay(paper_dict)
+
 
 @app.post("/ingest", response_model=IngestResponse, status_code=202)
 async def ingest_papers(req: IngestRequest):
@@ -48,15 +57,14 @@ async def ingest_papers(req: IngestRequest):
     for paper in req.papers:
         # Serialize to JSON-safe dict before sending to Celery
         paper_dict = paper.model_dump(mode="json")
-        result = ingest_paper_task.delay(paper_dict)
+        result = await asyncio.to_thread(_send_ingest_task, paper_dict)
         tasks.append(TaskRef(paperId=paper.paperId, taskId=result.id))
 
     return IngestResponse(tasks=tasks)
 
 
-@app.get("/ingest/status/{task_id}", response_model=TaskStatus)
-async def get_task_status(task_id: str):
-    """Check the status of a single ingestion task."""
+def _check_task(task_id: str) -> TaskStatus:
+    """Synchronous helper — safe to run in a thread."""
     result = celery_app.AsyncResult(task_id)
     return TaskStatus(
         taskId=task_id,
@@ -65,17 +73,14 @@ async def get_task_status(task_id: str):
     )
 
 
+@app.get("/ingest/status/{task_id}", response_model=TaskStatus)
+async def get_task_status(task_id: str):
+    """Check the status of a single ingestion task."""
+    return await asyncio.to_thread(_check_task, task_id)
+
+
 @app.post("/ingest/status/batch")
 async def get_batch_status(task_ids: list[str]):
     """Check the status of multiple ingestion tasks at once."""
-    statuses: list[TaskStatus] = []
-    for task_id in task_ids:
-        result = celery_app.AsyncResult(task_id)
-        statuses.append(
-            TaskStatus(
-                taskId=task_id,
-                state=result.state,
-                result=result.result if result.ready() else None,
-            )
-        )
+    statuses = [await asyncio.to_thread(_check_task, tid) for tid in task_ids]
     return {"statuses": statuses}

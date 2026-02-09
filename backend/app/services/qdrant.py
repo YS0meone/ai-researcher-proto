@@ -14,16 +14,29 @@ from pathlib import Path
 import logging
 from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers import GrobidParser
+from collections import defaultdict
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_classic.retrievers import ParentDocumentRetriever
+from app.agent.RedisDocumentStore import RedisDocumentStore
+from langchain_openai import OpenAIEmbeddings
+from app.core.config import settings
 
-
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
 logger = logging.getLogger(__name__)
-embeddings = HuggingFaceEmbeddings(model_name="allenai-specter") 
+kv_store = RedisDocumentStore(redis_url="redis://localhost:6379")
+
 
 class QdrantService:
 
     def __init__(self, config: QdrantConfig):
         self.config = config
         self.client = QdrantClient(url=self.config.url)
+
+        self.child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            add_start_index=True
+        )
 
         collection = self.config.collection
         if not self.client.collection_exists(collection):
@@ -40,6 +53,13 @@ class QdrantService:
             collection_name=collection,
             embedding=embeddings,
         )
+
+        self.retriever = ParentDocumentRetriever(
+            vectorstore=self.vector_store,
+            docstore=kv_store,
+            child_splitter=self.child_splitter
+        )
+
     
     def download_pdf(self, paper: 'ArxivPaper'):
         client = arxiv.Client()
@@ -150,36 +170,34 @@ class QdrantService:
         # Ensure paperId is also stored under 'id' for consistent filtering
         data["id"] = paper.paperId
         return data
-    def add_s2_paper(self, paper: S2Paper) -> int:
-        """Ingest an S2Paper by downloading its open-access PDF, parsing with
-        GROBID, and storing the resulting chunks in Qdrant.
 
-        Returns:
-            Number of document chunks stored.
-
-        Raises:
-            ValueError: If no PDF URL is available or the PDF yields no chunks.
-        """
-        self.empty_pdf_folder()
-        self._download_s2_pdf(paper)
-
+    def add_s2_paper(self, file_name: str, paper_id: str) -> int:
         loader = GenericLoader.from_filesystem(
             self.config.output_dir,
-            glob="*",
+            glob=file_name+".pdf",
             suffixes=[".pdf"],
             parser=GrobidParser(segment_sentences=False),
         )
         docs = loader.load()
         if not docs:
-            raise ValueError(f"GROBID produced no chunks for paper {paper.paperId}")
+            raise ValueError(f"GROBID produced no chunks for paper {file_name}")
 
-        metadata = self._s2_paper_metadata(paper)
+        section_docs = defaultdict(list)
         for doc in docs:
-            doc.metadata.update(metadata)
+            section_docs[doc.metadata.get("section_title", "General")].append(doc)
+        new_docs = []
+        for docs in section_docs.values():
+            metadata = docs[0].metadata.copy()
+            del metadata["text"]
+            del metadata["file_path"]
+            del metadata["bboxes"]
+            metadata["id"] = paper_id
+            new_docs.append(Document(page_content="\n\n".join([doc.page_content for doc in docs]), metadata=metadata))
+        
+        self.retriever.add_documents(new_docs)
 
-        self.vector_store.add_documents(docs)
-        logger.info(f"Added S2 paper {paper.paperId} to Qdrant ({len(docs)} chunks)")
-        return len(docs)
+        logger.info(f"Added S2 paper {file_name} to Qdrant ({len(new_docs)} chunks)")
+        return len(new_docs)
 
     def add_s2_paper_abstract_only(self, paper: S2Paper) -> int:
         """Fallback ingestion: embed title + abstract as a single document
@@ -201,7 +219,7 @@ class QdrantService:
         metadata = self._s2_paper_metadata(paper)
 
         doc = Document(page_content=content, metadata=metadata)
-        self.vector_store.add_documents([doc])
+        self.retriever.add_documents([doc])
         logger.info(f"Added S2 paper {paper.paperId} abstract-only to Qdrant")
         return 1
 

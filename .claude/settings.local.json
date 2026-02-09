@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run:*)",
+      "mcp__langchain_docs__SearchDocsByLangChain",
+      "WebSearch"
+    ]
+  }
+}

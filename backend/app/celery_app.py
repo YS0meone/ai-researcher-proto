@@ -15,5 +15,5 @@ celery_app.conf.update(
     task_track_started=True,  # Track STARTED state
 )
 
-# Auto-discover tasks in app.tasks package
-celery_app.autodiscover_tasks(["app.tasks"])
+# Explicitly register task modules
+celery_app.conf.include = ["app.tasks.ingest"]

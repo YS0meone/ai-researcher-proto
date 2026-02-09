@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 
 interface Author {
   authorId?: string;
@@ -23,16 +24,25 @@ interface PaperComponentProps {
   url?: string;
   isSelected?: boolean;
   onSelectChange?: (paperId: string, selected: boolean) => void;
+  openAccessPdf?: { url?: string } | null;
 }
 
 interface PaperListComponentProps {
   papers: PaperComponentProps[];
 }
 
+interface IngestStatus {
+  status: 'idle' | 'ingesting' | 'success' | 'error';
+  message?: string;
+  taskIds?: { paperId: string; taskId: string }[];
+}
+
 export const PaperListComponent = (props: PaperListComponentProps) => {
   const paperCount = props.papers?.length || 0;
   const [selectedPapers, setSelectedPapers] = useState<Set<string>>(new Set());
-  
+  const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
+  const backendApiUrl = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:2024';
+
   if (!props.papers || paperCount === 0) {
     return (
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center">
@@ -53,6 +63,62 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
     });
   };
 
+  const handleIngestSelected = async () => {
+    if (selectedPapers.size === 0) return;
+
+    setIngestStatus({ status: 'ingesting', message: 'Submitting papers for ingestion...' });
+
+    try {
+      // Filter papers to only include selected ones
+      const papersToIngest = props.papers.filter(
+        (p) => p.paperId && selectedPapers.has(p.paperId)
+      );
+
+      // Make POST request to backend using backend API URL
+      const response = await fetch(`${backendApiUrl}/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          papers: papersToIngest,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ingestion failed (${response.status}): ${errorText || response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      setIngestStatus({
+        status: 'success',
+        message: `Successfully submitted ${selectedPapers.size} paper(s) for ingestion!`,
+        taskIds: result.tasks,
+      });
+
+      // Show success toast
+      toast.success('Papers Submitted for Ingestion', {
+        description: `${selectedPapers.size} paper(s) have been queued for processing. Check the Celery worker logs for progress.`,
+      });
+
+      // Clear selection after successful submission
+      setSelectedPapers(new Set());
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to ingest papers';
+      setIngestStatus({
+        status: 'error',
+        message: errorMessage,
+      });
+
+      // Show error toast
+      toast.error('Ingestion Failed', {
+        description: errorMessage,
+      });
+    }
+  };
+
   const selectedCount = selectedPapers.size;
 
   return (
@@ -67,10 +133,47 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
         </span>
       </div>
 
+      {/* Action Bar with Ingest Button */}
+      {selectedCount > 0 && (
+        <div className="flex items-center gap-3 bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
+          <button
+            onClick={handleIngestSelected}
+            disabled={ingestStatus.status === 'ingesting'}
+            className={`px-4 py-2 rounded-md font-medium text-white transition-all duration-200 ${
+              ingestStatus.status === 'ingesting'
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'
+            }`}
+          >
+            {ingestStatus.status === 'ingesting' ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Ingesting...
+              </span>
+            ) : (
+              `Ingest ${selectedCount} Paper${selectedCount !== 1 ? 's' : ''}`
+            )}
+          </button>
+
+          {ingestStatus.message && (
+            <span className={`text-sm ${
+              ingestStatus.status === 'success' ? 'text-emerald-600' :
+              ingestStatus.status === 'error' ? 'text-red-600' :
+              'text-gray-600'
+            }`}>
+              {ingestStatus.message}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Papers List */}
       <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
         {props.papers.map((paper, index) => (
-          <PaperComponent 
+          <PaperComponent
             key={paper.paperId || paper.url || index}
             {...paper}
             isSelected={selectedPapers.has(paper.paperId || '')}

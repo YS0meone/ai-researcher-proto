@@ -48,8 +48,8 @@ def ingest_paper_task(self, paper_dict: dict) -> dict:
     )
     results = client.results(search)
     arxiv_paper = None 
-    for paper in results:
-        arxiv_paper = paper
+    for result in results:
+        arxiv_paper = result
         break
 
     has_pdf = arxiv_paper is not None
@@ -58,10 +58,10 @@ def ingest_paper_task(self, paper_dict: dict) -> dict:
     if has_pdf:
         try:
             file_name = re.sub(r'[<>:"/\\|?*]', '_', arxiv_paper.title.replace(" ", "_"))
-            Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
-            arxiv_paper.download_pdf(dirpath=self.config.output_dir, filename=file_name+".pdf")
+            Path(settings.LOADER_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+            arxiv_paper.download_pdf(dirpath=settings.LOADER_OUTPUT_DIR, filename=file_name+".pdf")
 
-            chunk_count = qdrant.add_s2_paper(file_name)
+            chunk_count = qdrant.add_s2_paper(file_name, paper.paperId)
             logger.info(f"Ingested paper {paper.paperId} via PDF ({chunk_count} chunks)")
             return {
                 "paperId": paper.paperId,

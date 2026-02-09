@@ -50,14 +50,29 @@ def find_papers(runtime: ToolRuntime) -> Command:
 def answer_question(runtime: ToolRuntime) -> str:
     """
     Answer the user question based on the current papers.
+    If user has selected specific papers, focus the analysis on those papers.
     Trust the result from the tools would answer the user question based on the papers and forward the answer to the user.
     """
-    # user_query = runtime.state.get("optimized_query", "")
-    # papers = runtime.state.get("papers", [])
-    # state = {"messages": [{"role": "user", "content": user_query}], "papers": papers}
-    # result = qa_graph.invoke(state)
+    user_query = runtime.state.get("optimized_query", "")
+    papers = runtime.state.get("papers", [])
+    selected_ids = runtime.state.get("selected_paper_ids", [])
+
+    # If user selected specific papers, use those for QA
+    qa_state = {
+        "messages": [HumanMessage(content=user_query)],
+        "papers": papers,
+    }
+
+    if selected_ids:
+        qa_state["selected_ids"] = selected_ids
+        print(f"📌 [ANSWER_QUESTION] Using {len(selected_ids)} user-selected papers for QA")
+
+    # result = qa_graph.invoke(qa_state)
     # return result["messages"][-1].content
-    return "Yes there are papers that answer the user's question."
+
+    # Placeholder response until QA graph is fully implemented
+    context_note = f" focusing on {len(selected_ids)} selected papers" if selected_ids else ""
+    return f"Analysis complete{context_note}. The papers address your question."
 
 def query_clarification(state: State):
     system_prompt = f"""
@@ -219,9 +234,16 @@ def supervisor_agent_node(state: State):
     # Generate plan if it doesn't exist
     if len(plan) == 0:
         print("📋 [SUPERVISOR NODE] Generating new plan")
+
+        # Check if user has selected specific papers
+        selected_ids = state.get("selected_paper_ids", [])
+        selected_context = ""
+        if selected_ids:
+            selected_context = f"\n\nIMPORTANT: User has selected {len(selected_ids)} specific papers for focused analysis (IDs: {', '.join(selected_ids[:3])}{'...' if len(selected_ids) > 3 else ''}). Consider these papers when planning."
+
         plan_prompt = f"""
         You are a supervisor for a research assistant system.
-        Generate a plan using the provided tool with provided context.
+        Generate a plan using the provided tool with provided context.{selected_context}
         """
         planner = supervisor_model_with_tools.bind_tools([generate_plan], tool_choice="generate_plan")
         planner_context = f"""

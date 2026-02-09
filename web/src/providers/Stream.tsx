@@ -31,6 +31,7 @@ const useTypedStream = useStream<
     UpdateType: {
       messages?: Message[] | Message | string;
       ui?: (UIMessage | RemoveUIMessage)[] | UIMessage | RemoveUIMessage;
+      selected_paper_ids?: string[];
     };
     CustomEventType: UIMessage | RemoveUIMessage;
   }

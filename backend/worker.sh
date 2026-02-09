@@ -1,0 +1,1 @@
+uv run celery -A app.celery_app worker --pool=solo --loglevel=info

@@ -19,11 +19,15 @@ import {
   LoaderCircle,
   PanelRightOpen,
   PanelRightClose,
+  PanelLeftOpen,
+  PanelLeftClose,
   SquarePen,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import ThreadHistory from "./history";
+import SelectedPapersPanel from "./selected-papers-panel";
+import { usePaperSelection } from "@/providers/PaperSelection";
 import { toast } from "sonner";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
@@ -101,6 +105,10 @@ export function Thread() {
     "chatHistoryOpen",
     parseAsBoolean.withDefault(false),
   );
+  const [selectedPapersOpen, setSelectedPapersOpen] = useQueryState(
+    "selectedPapersOpen",
+    parseAsBoolean.withDefault(false),
+  );
   const [hideToolCalls, setHideToolCalls] = useQueryState(
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
@@ -108,6 +116,7 @@ export function Thread() {
   const [input, setInput] = useState("");
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
+  const { hasSelection, selectedPaperIds } = usePaperSelection();
 
   const stream = useStreamContext();
   const messages = stream.messages;
@@ -170,7 +179,10 @@ export function Thread() {
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
     stream.submit(
-      { messages: [...toolMessages, newHumanMessage] },
+      {
+        messages: [...toolMessages, newHumanMessage],
+        selected_paper_ids: selectedPaperIds,
+      },
       {
         streamMode: ["values"],
         optimisticValues: (prev) => ({
@@ -205,28 +217,11 @@ export function Thread() {
   );
 
   return (
-    <div className="flex w-full h-screen overflow-hidden">
-      <div className="relative lg:flex hidden">
-        <motion.div
-          className="absolute h-full border-r bg-white overflow-hidden z-20"
-          style={{ width: 300 }}
-          animate={
-            isLargeScreen
-              ? { x: chatHistoryOpen ? 0 : -300 }
-              : { x: chatHistoryOpen ? 0 : -300 }
-          }
-          initial={{ x: -300 }}
-          transition={
-            isLargeScreen
-              ? { type: "spring", stiffness: 300, damping: 30 }
-              : { duration: 0 }
-          }
-        >
-          <div className="relative h-full" style={{ width: 300 }}>
-            <ThreadHistory />
-          </div>
-        </motion.div>
-      </div>
+    <div className="relative flex w-full h-screen overflow-hidden">
+      {/* Left panel: Thread History - renders its own panel */}
+      {chatHistoryOpen && <ThreadHistory />}
+
+      {/* Main content area */}
       <motion.div
         className={cn(
           "flex-1 flex flex-col min-w-0 overflow-hidden relative",
@@ -235,11 +230,7 @@ export function Thread() {
         layout={isLargeScreen}
         animate={{
           marginLeft: chatHistoryOpen ? (isLargeScreen ? 300 : 0) : 0,
-          width: chatHistoryOpen
-            ? isLargeScreen
-              ? "calc(100% - 300px)"
-              : "100%"
-            : "100%",
+          marginRight: selectedPapersOpen ? (isLargeScreen ? 400 : 0) : 0,
         }}
         transition={
           isLargeScreen
@@ -310,6 +301,24 @@ export function Thread() {
               <div className="flex items-center">
                 <OpenGitHubRepo />
               </div>
+              {hasSelection && (
+                <div className="relative">
+                  <Button
+                    className="hover:bg-gray-100"
+                    variant="ghost"
+                    onClick={() => setSelectedPapersOpen((p) => !p)}
+                  >
+                    {selectedPapersOpen ? (
+                      <PanelLeftClose className="size-5" />
+                    ) : (
+                      <PanelLeftOpen className="size-5" />
+                    )}
+                  </Button>
+                  <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-medium min-w-[20px] text-center">
+                    {selectedPaperIds.length}
+                  </span>
+                </div>
+              )}
               <TooltipIconButton
                 size="lg"
                 className="p-4"
@@ -444,6 +453,13 @@ export function Thread() {
           />
         </StickToBottom>
       </motion.div>
+
+      {/* Right panel: Selected Papers - absolutely positioned */}
+      {selectedPapersOpen && (
+        <div className="absolute right-0 top-0 h-full w-[400px] border-l bg-white shadow-lg z-30 hidden lg:block">
+          <SelectedPapersPanel />
+        </div>
+      )}
     </div>
   );
 }

@@ -15,8 +15,9 @@ class State(AgentState):
     optimized_query: Optional[str]  # Query optimized for search
     is_clear: Optional[bool]
     papers: List[S2Paper]
-    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]  # UI messages channel 
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]  # UI messages channel
     plan_steps: List[Literal["answer_question", "find_papers", "end"]]
+    selected_paper_ids: List[str]  # Paper IDs selected by user for focused analysis
 
     # plan_reasoning: str
     

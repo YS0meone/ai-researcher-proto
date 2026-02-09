@@ -3,6 +3,7 @@ import App from "./App.tsx";
 import { createRoot } from "react-dom/client";
 import { StreamProvider } from "./providers/Stream.tsx";
 import { ThreadProvider } from "./providers/Thread.tsx";
+import { PaperSelectionProvider } from "./providers/PaperSelection.tsx";
 import { Toaster } from "@/components/ui/sonner";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v6";
 import { BrowserRouter } from "react-router-dom";
@@ -12,7 +13,9 @@ createRoot(document.getElementById("root")!).render(
     <NuqsAdapter>
       <ThreadProvider>
         <StreamProvider>
-          <App />
+          <PaperSelectionProvider>
+            <App />
+          </PaperSelectionProvider>
         </StreamProvider>
       </ThreadProvider>
       <Toaster />

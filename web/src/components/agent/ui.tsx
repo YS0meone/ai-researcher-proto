@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
+import { usePaperSelection, PaperData } from "@/providers/PaperSelection";
 
 interface Author {
   authorId?: string;
@@ -39,7 +40,8 @@ interface IngestStatus {
 
 export const PaperListComponent = (props: PaperListComponentProps) => {
   const paperCount = props.papers?.length || 0;
-  const [selectedPapers, setSelectedPapers] = useState<Set<string>>(new Set());
+  const { selectPaper } = usePaperSelection(); // Only used to add to persistent list after ingestion
+  const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
   const backendApiUrl = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:2024';
 
@@ -52,7 +54,7 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
   }
 
   const handleSelectChange = (paperId: string, selected: boolean) => {
-    setSelectedPapers((prev) => {
+    setTempSelected(prev => {
       const newSet = new Set(prev);
       if (selected) {
         newSet.add(paperId);
@@ -63,15 +65,15 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
     });
   };
 
-  const handleIngestSelected = async () => {
-    if (selectedPapers.size === 0) return;
+  const handleAddToPaperList = async () => {
+    if (tempSelected.size === 0) return;
 
-    setIngestStatus({ status: 'ingesting', message: 'Submitting papers for ingestion...' });
+    setIngestStatus({ status: 'ingesting', message: 'Adding papers to your list...' });
 
     try {
       // Filter papers to only include selected ones
       const papersToIngest = props.papers.filter(
-        (p) => p.paperId && selectedPapers.has(p.paperId)
+        (p) => p.paperId && tempSelected.has(p.paperId)
       );
 
       // Make POST request to backend using backend API URL
@@ -87,39 +89,60 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Ingestion failed (${response.status}): ${errorText || response.statusText}`);
+        throw new Error(`Failed to add papers (${response.status}): ${errorText || response.statusText}`);
       }
 
       const result = await response.json();
 
+      // Add papers to persistent list (shown in side panel)
+      papersToIngest.forEach(paper => {
+        const paperData: PaperData = {
+          paperId: paper.paperId,
+          title: paper.title,
+          authors: paper.authors,
+          venue: paper.venue,
+          publicationVenue: paper.publicationVenue,
+          publicationDate: paper.publicationDate,
+          year: paper.year,
+          abstract: paper.abstract,
+          citationCount: paper.citationCount,
+          url: paper.url,
+          openAccessPdf: paper.openAccessPdf,
+        };
+        selectPaper(paperData);
+      });
+
       setIngestStatus({
         status: 'success',
-        message: `Successfully submitted ${selectedPapers.size} paper(s) for ingestion!`,
+        message: `Successfully added ${tempSelected.size} paper(s) to your list!`,
         taskIds: result.tasks,
       });
 
-      // Show success toast
-      toast.success('Papers Submitted for Ingestion', {
-        description: `${selectedPapers.size} paper(s) have been queued for processing. Check the Celery worker logs for progress.`,
+      // Show success toast with info about ingestion
+      const newlyIngested = result.tasks?.filter((t: any) => t.status === 'queued').length || 0;
+      toast.success('Papers Added to Your List', {
+        description: newlyIngested > 0
+          ? `${tempSelected.size} paper(s) added. ${newlyIngested} new paper(s) are being processed in the background.`
+          : `${tempSelected.size} paper(s) added to your list.`,
       });
 
-      // Clear selection after successful submission
-      setSelectedPapers(new Set());
+      // Clear temporary selections
+      setTempSelected(new Set());
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to ingest papers';
+      const errorMessage = error instanceof Error ? error.message : 'Failed to add papers';
       setIngestStatus({
         status: 'error',
         message: errorMessage,
       });
 
       // Show error toast
-      toast.error('Ingestion Failed', {
+      toast.error('Failed to Add Papers', {
         description: errorMessage,
       });
     }
   };
 
-  const selectedCount = selectedPapers.size;
+  const selectedCount = tempSelected.size;
 
   return (
     <div className="space-y-4">
@@ -129,44 +152,50 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
           📚 Found {paperCount} Paper{paperCount !== 1 ? 's' : ''}
         </h3>
         <span className="text-sm text-gray-600">
-          {selectedCount > 0 ? `${selectedCount} selected` : 'Select papers to save'}
+          {selectedCount > 0 ? `${selectedCount} selected` : 'Select papers to add to your list'}
         </span>
       </div>
 
-      {/* Action Bar with Ingest Button */}
+      {/* Action Bar with Add Button */}
       {selectedCount > 0 && (
-        <div className="flex items-center gap-3 bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
-          <button
-            onClick={handleIngestSelected}
-            disabled={ingestStatus.status === 'ingesting'}
-            className={`px-4 py-2 rounded-md font-medium text-white transition-all duration-200 ${
-              ingestStatus.status === 'ingesting'
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'
-            }`}
-          >
-            {ingestStatus.status === 'ingesting' ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Ingesting...
-              </span>
-            ) : (
-              `Ingest ${selectedCount} Paper${selectedCount !== 1 ? 's' : ''}`
-            )}
-          </button>
+        <div className="flex flex-col gap-2 bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleAddToPaperList}
+              disabled={ingestStatus.status === 'ingesting'}
+              className={`px-4 py-2 rounded-md font-medium text-white transition-all duration-200 ${
+                ingestStatus.status === 'ingesting'
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'
+              }`}
+            >
+              {ingestStatus.status === 'ingesting' ? (
+                <span className="flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Adding...
+                </span>
+              ) : (
+                `Add ${selectedCount} to Paper List`
+              )}
+            </button>
 
-          {ingestStatus.message && (
-            <span className={`text-sm ${
-              ingestStatus.status === 'success' ? 'text-emerald-600' :
-              ingestStatus.status === 'error' ? 'text-red-600' :
-              'text-gray-600'
-            }`}>
-              {ingestStatus.message}
-            </span>
-          )}
+            {ingestStatus.message && (
+              <span className={`text-sm ${
+                ingestStatus.status === 'success' ? 'text-emerald-600' :
+                ingestStatus.status === 'error' ? 'text-red-600' :
+                'text-gray-600'
+              }`}>
+                {ingestStatus.message}
+              </span>
+            )}
+          </div>
+
+          <p className="text-xs text-gray-500">
+            New papers will be processed and added to your database in the background
+          </p>
         </div>
       )}
 
@@ -176,7 +205,7 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
           <PaperComponent
             key={paper.paperId || paper.url || index}
             {...paper}
-            isSelected={selectedPapers.has(paper.paperId || '')}
+            isSelected={paper.paperId ? tempSelected.has(paper.paperId) : false}
             onSelectChange={handleSelectChange}
           />
         ))}

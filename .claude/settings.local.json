@@ -5,7 +5,8 @@
       "Bash(uv run pytest:*)",
       "Bash(uv run:*)",
       "mcp__langchain_docs__SearchDocsByLangChain",
-      "WebSearch"
+      "WebSearch",
+      "Bash(pnpm type-check:*)"
     ]
   }
 }

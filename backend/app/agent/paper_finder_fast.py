@@ -23,15 +23,15 @@ search_agent_model = model.bind_tools(tools)
 
 # Initialize Cohere reranker
 if not settings.COHERE_API_KEY:
-    print("⚠️  WARNING: COHERE_API_KEY not set in .env. Reranking will be skipped.")
+    print("[WARNING] COHERE_API_KEY not set in .env. Reranking will be skipped.")
     ranker = None
 else:
     try:
         ranker = Reranker("cohere", api_key=settings.COHERE_API_KEY)
-        print(f"✅ Cohere reranker initialized successfully")
+        print(f"[OK] Cohere reranker initialized successfully")
     except Exception as e:
-        print(f"❌ Failed to initialize Cohere reranker: {e}")
-        print(f"⚠️  Reranking will be skipped.")
+        print(f"[ERROR] Failed to initialize Cohere reranker: {e}")
+        print(f"[WARNING] Reranking will be skipped.")
         ranker = None
 
 
@@ -141,10 +141,10 @@ def rerank_node(state: SearchAgentState):
                 for match in top_matches:
                     paper_obj = S2Paper.model_validate(match.document.metadata)
                     final_papers.append(paper_obj)
-                print(f"✅ Reranking successful: {len(final_papers)} papers")
+                print(f"[OK] Reranking successful: {len(final_papers)} papers")
             except Exception as e:
-                print(f"❌ Reranking failed: {type(e).__name__}: {e}")
-                print(f"📋 Falling back to original order (top {MAX_PAPER_LIST_LENGTH})")
+                print(f"[ERROR] Reranking failed: {type(e).__name__}: {e}")
+                print(f"[INFO] Falling back to original order (top {MAX_PAPER_LIST_LENGTH})")
                 final_papers = deduped_list[:MAX_PAPER_LIST_LENGTH]
     else:
         final_papers = []

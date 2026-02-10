@@ -12,23 +12,70 @@ from langgraph.types import Command
 from app.db.schema import S2Paper
 from langchain_tavily import TavilySearch
 from app.agent.utils import get_paper_info_text
-from langgraph.types import Document
+from langchain_core.documents import Document
 from langchain_core.messages import ToolMessage
 from pydantic import ConfigDict
+from langchain.chat_models import init_chat_model
+from langchain.messages import SystemMessage, HumanMessage
+from typing import Literal
+
+filter_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
 
-def merge_evidence(evds1: List[Document], evds2: List[Document]) -> List[Document]:
+def remove_duplicated_evidence(existing_evds: List[Document], new_evds: List[Document]) -> List[Document]:
     exists_evds_ids = set()
-    for evd in evds1:
+    non_duplicated_evds = []
+    for evd in existing_evds:
         exists_evds_ids.add(evd.metadata.get("id") + "_" + evd.metadata.get("para"))
-    for evd in evds2:
+    for evd in new_evds:
         if evd.metadata.get("id") + "_" + evd.metadata.get("para") not in exists_evds_ids:
-            evds1.append(evd)
-    return evds1
+            non_duplicated_evds.append(evd)
+    return non_duplicated_evds
+
+def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, batch_size: int = 3) -> List[int]:
+
+    llm_document_filter_system = """
+    You are an expert in document filtering for academic paper QA.
+    You are given a list of documents, a user query and the paper abstracts.
+    You need to filter the documents based on the user query and the paper abstracts.
+    If the document is relevant to answer the user question or even helpful to understand the user question, you should keep it
+    If the document is not relevant to answer the user question or not helpful to understand the user question, you should filter it
+    You should output a list of index of the documents to keep.
+    """
+    
+    results = []
+    for i in range(0,len(evds),batch_size):
+        batch_evds = evds[i:i+batch_size]
+        batch_evidence_text = "\n".join([f"Documents {i}:\n{evd.page_content}" for i, evd in enumerate(batch_evds)])
+        llm_document_filter_prompt = f"""
+        User query: {query}
+        Paper abstracts: {abstracts}
+        Documents: {batch_evidence_text}
+        """
+        class DocumentFilterResult(BaseModel):
+            decisions: List[Literal["0", "1", "2"]] = Field(description="The index of the documents to keep")
+        
+        structured_model = filter_model.with_structured_output(DocumentFilterResult)
+        llm_document_filter_response = structured_model.invoke([
+            SystemMessage(content=llm_document_filter_system),
+            HumanMessage(content=llm_document_filter_prompt)
+        ])
+        index_to_keep = [int(decision) + i for decision in llm_document_filter_response.decisions]
+        results.extend(index_to_keep)
+    return results
+
+def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> Dict[str, str]:
+    abstracts = {}
+    for paper in papers:
+        if paper.paperId in selected_paper_ids:
+            abstracts[paper.paperId] = paper.abstract
+    return abstracts
+
 
 @tool
 def retrieve_evidence_from_selected_papers(
     runtime: ToolRuntime,
+    reasoning: str,
     query: str,
     limit: int = 10,
     score_threshold: Optional[float] = None,
@@ -42,20 +89,22 @@ def retrieve_evidence_from_selected_papers(
     - When you need to retrieve more information from the selected papers to better understand the user question
 
     Args:
+        reasoning: The reasoning for why you choose these arguments to retrieve evidence
         query: The search query string used to retrieve relevant evidence from the selected papers   
-        limit: Maximum number of results to return (default: 10, max: 30), set larger number if you need more evidence
-        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results
+        limit: Maximum number of results to return (default: 10, max: 30), set larger number if you need more evidence or comprehensive coverage.
+        score_threshold: Optional minimum similarity threshold (0.0-1.0) to filter results. Set higher value if you need more relevant evidence and lower for more comprehensive coverage.
     """
     tool_call_id = runtime.tool_call_id
     state = runtime.state if runtime else {}
     ids = state.get("selected_paper_ids", [])
-
+    papers = state.get("papers", [])
+    abstracts = get_paper_abstract(papers, ids)
     results = []
+    existing_evds = state.get("evidences", [])
 
     try:
         # Initialize Qdrant service
         qdrant_service = QdrantService(settings.qdrant_config)
-        
         # Perform vector search
         results = qdrant_service.search_selected_ids(
             ids=ids,
@@ -63,6 +112,9 @@ def retrieve_evidence_from_selected_papers(
             k=min(limit, 30),
             score_threshold=score_threshold,
         )
+        results = remove_duplicated_evidence(existing_evds, results)
+        index_to_keep = llm_document_filter_batch(results, query, abstracts, batch_size=3)
+        results = [results[i] for i in index_to_keep if 0 <= i < len(results)]
     except Exception as e:
         return Command(
             update={"messages": [ToolMessage(
@@ -70,17 +122,14 @@ def retrieve_evidence_from_selected_papers(
                 tool_call_id=tool_call_id
             )]}
         )
-
-    existing_evds = state.get("evidences", [])
-    merged_evds = merge_evidence(existing_evds, results)
-
+    # using reducer to merge the result and avoid racing condition
     return Command[tuple[()]](
         update={
             "messages": [ToolMessage(
                 content=f"I found {len(results)} relevant evidence for your query.",
                 tool_call_id=tool_call_id
             )],
-            "evidences": merged_evds
+            "evidences": results
         }
     )
 

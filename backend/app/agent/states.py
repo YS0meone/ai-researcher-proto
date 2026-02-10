@@ -1,11 +1,10 @@
 from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict, Tuple, Sequence
-from langgraph.graph.message import add_messages
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 import operator
 from langchain.agents import AgentState
 from app.db.schema import S2Paper
-from langgraph.types import Document
-from langgraph.graph.message import MessageState
+from langchain_core.documents import Document
+from langgraph.graph.message import MessagesState
 
 class State(AgentState):
     optimized_query: Optional[str]
@@ -16,7 +15,7 @@ class State(AgentState):
     selected_paper_ids: List[str]
 
 
-class PaperFinderState(MessageState):
+class PaperFinderState(MessagesState):
     optimized_query: Optional[str]
     plan_steps: List[str]       
     completed_steps: Annotated[List[Tuple[str, str]], operator.add]
@@ -25,8 +24,8 @@ class PaperFinderState(MessageState):
     iter: int
     goal_achieved: bool
 
-class QAAgentState(MessageState):
-    evidences: List[Document]
+class QAAgentState(MessagesState):
+    evidences: Annotated[List[Document], operator.add]
     limitation: str
     qa_iteration: int
     selected_paper_ids: List[str]

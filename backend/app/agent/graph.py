@@ -22,6 +22,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from typing import Literal, List
 from app.agent.utils import get_paper_info_text
 
+
 setup_langsmith()
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ def should_clarify(state: State):
     route = "optimize" if is_clear else "end"
     return route
 
-supervisor_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY, parallel_tool_calls=False)
+supervisor_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 tools = [find_papers, get_paper_details]
 
 supervisor_prompt = """
@@ -202,13 +203,13 @@ def supervisor_agent_node(state: State):
                         message=ai_message
                     )
                     
-                    print(f"✅ [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
+                    print(f"[OK] [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
                     
                     # Return AI message to state and continue to next plan step
                     return {"messages": [ai_message]}
                 
                 except Exception as e:
-                    print(f"❌ [SUPERVISOR NODE] Failed to push UI message: {e}")
+                    print(f"[ERROR] [SUPERVISOR NODE] Failed to push UI message: {e}")
                     import traceback
                     traceback.print_exc()
                     # Continue to next plan step even if UI push fails

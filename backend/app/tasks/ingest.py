@@ -6,6 +6,7 @@ from app.services.qdrant import QdrantService
 import arxiv
 import re
 from pathlib import Path
+from pprint import pprint
 
 logger = logging.getLogger(__name__)
 
@@ -34,23 +35,28 @@ def ingest_paper_task(self, paper_dict: dict) -> dict:
     """
     paper = S2Paper(**paper_dict)
     qdrant = _get_qdrant_service()
+    pprint(paper)
 
-    # try to search the paper in arxiv for downloading
-    client = arxiv.Client(
-        delay_seconds=3.0,
-        num_retries=3
-    )
-    search = arxiv.Search(
-        query=f'ti:"{paper.title}"',
-        max_results=1,
-        sort_by=arxiv.SortCriterion.Relevance,
-        sort_order=arxiv.SortOrder.Descending
-    )
-    results = client.results(search)
-    arxiv_paper = None 
-    for result in results:
-        arxiv_paper = result
-        break
+    # Try to search the paper in arxiv for downloading
+    arxiv_paper = None
+    try:
+        client = arxiv.Client(
+            delay_seconds=3.0,
+            num_retries=3
+        )
+        search = arxiv.Search(
+            query=f'ti:"{paper.title}"',
+            max_results=1,
+            sort_by=arxiv.SortCriterion.Relevance,
+            sort_order=arxiv.SortOrder.Descending
+        )
+        results = client.results(search)
+        for result in results:
+            arxiv_paper = result
+            break
+    except Exception as e:
+        logger.warning(f"arXiv search failed for {paper.paperId}: {e}. Will fall back to abstract-only.")
+        arxiv_paper = None
 
     has_pdf = arxiv_paper is not None
 

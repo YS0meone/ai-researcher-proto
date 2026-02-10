@@ -20,6 +20,9 @@ from langchain_classic.retrievers import ParentDocumentRetriever
 from app.agent.RedisDocumentStore import RedisDocumentStore
 from langchain_openai import OpenAIEmbeddings
 from app.core.config import settings
+from langchain_core.runnables import ConfigurableField
+from typing import List
+
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
 logger = logging.getLogger(__name__)
@@ -58,6 +61,12 @@ class QdrantService:
             vectorstore=self.vector_store,
             docstore=kv_store,
             child_splitter=self.child_splitter
+        ).configurable_fields(
+            search_kwargs=ConfigurableField(
+                id="search_kwargs",
+                name="Search Arguments",
+                description="The search kwargs for the retriever"
+            )
         )
 
     
@@ -265,7 +274,7 @@ class QdrantService:
         logger.info(f"Found {len(results)} papers for query: {query[:50]}...")
         return results
     
-    def search_selected_ids(self, ids: list[str], query: str, k: int = 10, score_threshold: float = None) -> list[tuple[ArxivPaper, float]]:
+    def search_selected_ids(self, ids: list[str], query: str, k: int = 10, score_threshold: float = None) -> List[Document]:
         filter = Filter(
             must=[
                 FieldCondition(
@@ -274,30 +283,16 @@ class QdrantService:
                 )
             ]
         )
-        if score_threshold is not None:
-            docs_and_scores = self.vector_store.similarity_search_with_score(
-                query,
-                k=k,
-                score_threshold=score_threshold,
-                filter=filter
-            )
-        else:
-            docs_and_scores = self.vector_store.similarity_search_with_score(
-                query,
-                k=k,
-                filter=filter
-            )
-        results = []
-        for doc, score in docs_and_scores:
-            metadata = doc.metadata.copy()
-            metadata['supporting_detail'] = doc.page_content
-            # Create ArxivPaper object from metadata
-            try:
-                paper = ArxivPaper(**metadata)
-                results.append((paper, score))
-            except Exception as e:
-                logger.warning(f"Failed to create ArxivPaper from metadata: {e}")
-                continue
-        
-        logger.info(f"Found {len(results)} papers for ids: {ids[:50]}...")
+        results = self.retriever.invoke(
+            query,
+            config={
+                "configurable": {
+                    "search_kwargs": {
+                        "filter": filter,
+                        "score_threshold": score_threshold,
+                        "k": k,
+                }
+            }
+            }
+        )
         return results

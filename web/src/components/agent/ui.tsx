@@ -215,13 +215,7 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
 };
 
 export const PaperComponent = (props: PaperComponentProps) => {
-  // Helper to truncate abstract to ~200 words
-  const truncateAbstract = (text?: string) => {
-    if (!text) return "No abstract available.";
-    const words = text.split(/\s+/);
-    if (words.length <= 200) return text;
-    return words.slice(0, 200).join(" ") + "...";
-  };
+  const [isAbstractExpanded, setIsAbstractExpanded] = useState(false);
 
   // Helper to format authors
   const formatAuthors = () => {
@@ -318,9 +312,21 @@ export const PaperComponent = (props: PaperComponentProps) => {
               </div>
             )}
 
-            {/* Abstract */}
-            <div className="text-sm text-gray-600 leading-relaxed mb-4">
-              {truncateAbstract(props.abstract)}
+            {/* Abstract - Click to expand/collapse */}
+            <div
+              className="mb-4 cursor-pointer group"
+              onClick={() => setIsAbstractExpanded(!isAbstractExpanded)}
+            >
+              <div className={`text-sm text-gray-600 leading-relaxed ${
+                isAbstractExpanded ? '' : 'line-clamp-3'
+              }`}>
+                {props.abstract || "No abstract available."}
+              </div>
+              {props.abstract && props.abstract.length > 200 && (
+                <button className="text-xs text-emerald-600 hover:text-emerald-700 mt-1 font-medium">
+                  {isAbstractExpanded ? '− Show less' : '+ Show more'}
+                </button>
+              )}
             </div>
 
             {/* Footer: Citation count and actions */}

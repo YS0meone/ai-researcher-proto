@@ -7,23 +7,21 @@ from pydantic import BaseModel, Field
 from app.agent.states import State
 from app.agent.utils import get_user_query, setup_langsmith
 from app.core.config import settings         
-from app.tools.search import vector_search_papers_by_ids, get_paper_abstract
+from app.tools.search import retrieve_evidence_from_selected_papers, get_paper_abstract
 import logging
 import sys
 import json
+from typing import Union
+from app.agent.states import QAAgentState
+from app.db.schema import S2Paper
+
 
 logger = logging.getLogger(__name__)
 setup_langsmith()
+
 qa_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
-class RetrievalDecision(BaseModel):
-    """Structured output for retrieval decision."""
-    reasoning: str = Field(
-        description="The reasoning for the decision")
-    should_answer: bool = Field(
-        description="Whether the current evidence is sufficient to answer the user's question")
-    search_queries: List[str] = Field(
-        description="The search queries to be executed")
+
 
 QA_RETRIEVAL_SYSTEM = """You are an expert in evidence retrieval for academic paper QA.
 
@@ -46,70 +44,43 @@ Retrieval Strategy:
 - You should always understand the user's query first. If you are not sure about certain concept you should generate search queries to help you understand the user's query better.
 """
 
+def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> Dict[str, str]:
+    abstracts = {}
+    for paper in papers:
+        if paper.paperId in selected_paper_ids:
+            abstracts[paper.paperId] = paper.abstract
+    return abstracts
 
-def qa_prepare(state: State) -> Dict:
-    """
-    If user hasn't selected specific papers, select top papers from search results.
-    """
-    selected_ids = state.get("selected_ids", [])
-    papers = state.get("papers", [])
-    intent = state.get("intent")
-
-    # If QA-only mode and user has selected papers, use them
-    if intent == "qa_only" and selected_ids:
-        print(
-            f"QA mode with {len(selected_ids)} pre-selected papers", file=sys.stderr)
-        return {"sufficient_evidence": False}
-
-    # If search_then_qa mode, select top papers for QA
-    if intent == "search_then_qa" and papers and not selected_ids:
-        # Select top 5 papers for detailed QA
-        top_papers = papers[:5]
-        selected_ids = [p["arxiv_id"] for p in top_papers]
-
-        print(
-            f"Auto-selecting top {len(selected_ids)} papers for QA", file=sys.stderr)
-
-        return {
-            "selected_ids": selected_ids,
-            "qa_query": state.get("original_query"),
-            "messages": [AIMessage(content=f"Selected top {len(selected_ids)} papers for detailed analysis.")],
-            "sufficient_evidence": False
-        }
-
-    return {"sufficient_evidence": False}
-
-
-def qa_retrieve(state: State) -> Dict:
+def qa_retrieve(state: QAAgentState) -> QAAgentState:
     """
     Retrieve relevant segments from selected papers using vector search.
 
-    Uses the selected_ids from state to scope the vector search to only
+    Uses the selected_paper_ids from state to scope the vector search to only
     the papers the user has chosen to ask questions about.
     """
-    user_msg = get_user_query(state["messages"])
-    selected_ids = state.get("selected_ids", [])
+    user_query = state.get("user_query", "")
+    selected_paper_ids = state.get("selected_paper_ids", [])
 
-    if not selected_ids:
+    if not selected_paper_ids:
         print("WARNING: No papers selected for QA!", file=sys.stderr)
         return {
-            "retrieved_segments": [],
+            "evidences": [],
             "messages": [AIMessage(content="No papers have been selected for Q&A. Please select papers first or use the paper finding mode.")]
         }
 
-    abstracts = get_paper_abstract(selected_ids)
-    segments = state.get("retrieved_segments", [])
-    segments_text = "\n".join(segments)
-    limitation = state.get("limitation", "No segments retrieved.")
+    abstracts = get_paper_abstract(selected_paper_ids)
+    evidences = state.get("evidences", [])
+    evidences_text = "\n".join(evidences)
+    limitation = state.get("limitation", "No evidences found.")
 
     abstracts_text = "\n".join([
         f"Paper {paper_id}:\n{abstract}"
         for paper_id, abstract in abstracts.items()
     ])
     
-    retrieval_prompt = f"""User question: {user_msg}
+    retrieval_prompt = f"""User query: {user_query}
 
-Selected papers to search: {selected_ids}
+Selected papers to search: {selected_paper_ids}
 
 Paper abstracts:
 {abstracts_text}
@@ -117,33 +88,44 @@ Paper abstracts:
 Limitation of the retrieved evidence:
 {limitation}
 
-Retrieved evidence:
-{segments_text}"""
+Retrieved evidences:
+{evidences_text}"""
+
+    class GeneratedSearchQueries(BaseModel):
+        reasoning: str = Field(
+            description="The reasoning for why we should generate search queries to retrieve more evidence")
+        search_queries: List[str] = Field(
+            description="The search queries to be executed")
+    
+    class ShouldAnswer(BaseModel):
+        reasoning: str = Field(
+            description="The reasoning for why we should answer the user's question based on the retrieved evidence and the limitation of the retrieved evidence")
+
+    class RetrievalDecision(BaseModel):
+        decision: Union[GeneratedSearchQueries, ShouldAnswer] = Field(
+            description="The decision for whether to generate search queries to retrieve more evidence or to answer the user's question")
 
     structured_model = qa_model.with_structured_output(RetrievalDecision)
-    plan = structured_model.invoke([
+    decision_response = structured_model.invoke([
         SystemMessage(content=QA_RETRIEVAL_SYSTEM),
         HumanMessage(content=retrieval_prompt)
     ])
 
-    if plan.should_answer:
+    if isinstance(decision_response.decision, ShouldAnswer):
         return {
-            "messages": [AIMessage(content=plan.reasoning)],
-            "rd_reason": plan.reasoning,
+            "messages": [AIMessage(content=decision_response.decision.reasoning)],
             "sufficient_evidence": True
         }
     
-    tool_model = qa_model.bind_tools([vector_search_papers_by_ids])
-    response = tool_model.invoke([
+    tool_model = qa_model.bind_tools([retrieve_evidence_from_selected_papers])
+    tool_response = tool_model.invoke([
         SystemMessage(content="Create vector search tool calls based on the search queries"),
-        HumanMessage(content=f"Search queries: {plan.search_queries}, Selected papers: {selected_ids}")
+        HumanMessage(content=f"Search queries: {decision_response.decision.search_queries}, Selected papers: {selected_paper_ids}")
     ])
-    retrieval_queries = state.get("retrieval_queries", []) + plan.search_queries
     return {
-        "messages": [response],
+        "messages": [tool_response],
         "sufficient_evidence": False,
-        "retrieval_queries": retrieval_queries,
-        "rd_reason": plan.reasoning
+        "retrieval_queries": decision_response.decision.search_queries,
     }
 
 def qa_rerank(state: State) -> Dict:
@@ -151,11 +133,11 @@ def qa_rerank(state: State) -> Dict:
     Extract tool results and rerank segments based on relevance.
     Uses LLM to evaluate which segments are most relevant to the user's query.
     """
-    existing_segments = state.get("retrieved_segments", [])
+    existing_segments = state.get("evidences", [])
 
     messages = state.get("messages", [])
     user_msg = get_user_query(messages)
-    selected_ids = state.get("selected_ids", [])
+    selected_paper_ids = state.get("selected_paper_ids", [])
     
     for msg in reversed(messages):
         if isinstance(msg, ToolMessage):
@@ -182,13 +164,13 @@ def qa_rerank(state: State) -> Dict:
     if not existing_segments:
         return {"messages": [AIMessage(content="No new segments found. Please try again.")]}
     # Get context for reranking
-    abstracts = get_paper_abstract(selected_ids)
+    abstracts = get_paper_abstract(selected_paper_ids)
     abstracts_text = "\n".join([
         f"Paper {paper_id}:\n{abstract}"
         for paper_id, abstract in abstracts.items()
     ])
     
-    retrieved_segments_text = "\n".join([f"Segment {i}:\n{segment}" for i, segment in enumerate(existing_segments)])
+    evidences_text = "\n".join([f"Segment {i}:\n{segment}" for i, segment in enumerate(existing_segments)])
     
     rerank_system = """You are an expert in evaluating the relevance of retrieved evidence for answering a research question.
     Your would be presented with a user question, paper abstracts, retrieved segments.
@@ -217,7 +199,7 @@ Paper abstracts:
 {abstracts_text}
 
 Retrieved segments:
-{retrieved_segments_text}
+{evidences_text}
 
 Select the relevant segments and identify the limitation of the retrieved segments."""
 
@@ -236,7 +218,7 @@ Select the relevant segments and identify the limitation of the retrieved segmen
     qa_iteration = state.get("qa_iteration", 0) + 1
     
     return {
-        "retrieved_segments": selected_segments ,
+        "evidences": selected_segments ,
         "limitation": response.limitation,
         "qa_iteration": qa_iteration
     }
@@ -248,16 +230,16 @@ def qa_answer(state: State) -> Dict:
     """
     messages = state.get("messages", [])
     user_msg = get_user_query(messages)
-    selected_ids = state.get("selected_ids", [])
+    selected_paper_ids = state.get("selected_paper_ids", [])
     
     # Get all accumulated evidence
-    segments = state.get("retrieved_segments", [])
+    segments = state.get("evidences", [])
     segments_text = "\n\n".join(segments) if segments else "No evidence retrieved."
     
     limitation = state.get("limitation", "No limitation")
     
     # Get paper abstracts for context
-    abstracts = get_paper_abstract(selected_ids)
+    abstracts = get_paper_abstract(selected_paper_ids)
     abstracts_text = "\n".join([
         f"Paper {paper_id}:\n{abstract}"
         for paper_id, abstract in abstracts.items()
@@ -326,9 +308,8 @@ def build_qa_graph():
     qa_builder = StateGraph(State)
 
     # Add nodes
-    qa_builder.add_node("qa_prepare", qa_prepare)
     qa_builder.add_node("qa_retrieve", qa_retrieve)
-    qa_builder.add_node("tools", ToolNode([vector_search_papers_by_ids]))
+    qa_builder.add_node("tools", ToolNode([retrieve_evidence_from_selected_papers]))
     qa_builder.add_node("qa_rerank", qa_rerank)
     qa_builder.add_node("qa_answer", qa_answer)
 

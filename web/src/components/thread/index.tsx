@@ -84,7 +84,7 @@ function OpenGitHubRepo() {
       <Tooltip>
         <TooltipTrigger asChild>
           <a
-            href="https://github.com/langchain-ai/agent-chat-ui"
+            href="https://github.com/YS0meone/ai-researcher-proto"
             target="_blank"
             className="flex items-center justify-center"
           >
@@ -301,24 +301,24 @@ export function Thread() {
               <div className="flex items-center">
                 <OpenGitHubRepo />
               </div>
-              {hasSelection && (
-                <div className="relative">
-                  <Button
-                    className="hover:bg-gray-100"
-                    variant="ghost"
-                    onClick={() => setSelectedPapersOpen((p) => !p)}
-                  >
-                    {selectedPapersOpen ? (
-                      <PanelLeftClose className="size-5" />
-                    ) : (
-                      <PanelLeftOpen className="size-5" />
-                    )}
-                  </Button>
+              <div className="relative">
+                <Button
+                  className="hover:bg-gray-100"
+                  variant="ghost"
+                  onClick={() => setSelectedPapersOpen((p) => !p)}
+                >
+                  {selectedPapersOpen ? (
+                    <PanelLeftClose className="size-5" />
+                  ) : (
+                    <PanelLeftOpen className="size-5" />
+                  )}
+                </Button>
+                {hasSelection && (
                   <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-medium min-w-[20px] text-center">
                     {selectedPaperIds.length}
                   </span>
-                </div>
-              )}
+                )}
+              </div>
               <TooltipIconButton
                 size="lg"
                 className="p-4"

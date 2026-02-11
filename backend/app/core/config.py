@@ -43,11 +43,14 @@ class Settings(BaseSettings):
         validate_assignment=True,
         case_sensitive=False
     )
+    # Logging configuration
+    LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
     # LangSmith configuration (optional)
     LANGSMITH_TRACING_V2: bool = False
     LANGCHAIN_API_KEY: str = ""
     LANGCHAIN_PROJECT: str = "ai-researcher-proto"
-    
+
     OPENAI_API_KEY: str
     GEMINI_API_KEY: str
 

@@ -9,6 +9,7 @@ from langgraph.graph import StateGraph
 from app.agent.states import State
 import logging
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 from langchain.chat_models import init_chat_model
 from langgraph.graph import START, END
 from app.agent.utils import setup_langsmith
@@ -17,11 +18,13 @@ from langchain.messages import SystemMessage, AIMessage, ToolMessage, HumanMessa
 from app.tools.search import get_paper_details
 from langgraph.types import Command
 from langchain.tools import ToolRuntime
-from langgraph.graph.ui import AnyUIMessage, ui_message_reducer, push_ui_message
+from langgraph.graph.ui import push_ui_message
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing import Literal, List
 from app.agent.utils import get_paper_info_text
 
+# Initialize logging
+setup_logging()
 
 setup_langsmith()
 logger = logging.getLogger(__name__)
@@ -33,17 +36,22 @@ def find_papers(runtime: ToolRuntime) -> Command:
     It would update the current papers list with the new papers found.
     Trust the result from the tools would find the most relevant papers.
     """
-
+    
     user_query = runtime.state.get("optimized_query", "")
     papers = runtime.state.get("papers", [])
+
+    logger.info(f"Finding papers for query: {user_query[:100]}{'...' if len(user_query) > 100 else ''}")
+    logger.debug(f"Current paper count: {len(papers)}")
 
     state = {"optimized_query": user_query, "papers": papers, "messages": [HumanMessage(content=user_query)]}
     result = paper_finder_fast_graph.invoke(state)
     papers = result["papers"]
-    
+
+    logger.info(f"Found {len(papers)} papers")
+
     # Return papers via Command - UI message will be pushed from agent node
     return Command(
-        update={"papers": result["papers"], 
+        update={"papers": result["papers"],
         "messages": [ToolMessage(content=f"I found {len(result['papers'])} papers for your query.", tool_call_id=runtime.tool_call_id)]
         })
 
@@ -58,52 +66,98 @@ def answer_question(runtime: ToolRuntime) -> str:
     papers = runtime.state.get("papers", [])
     selected_ids = runtime.state.get("selected_paper_ids", [])
 
+    logger.info(f"Answering question for query: {user_query[:100]}{'...' if len(user_query) > 100 else ''}")
+    logger.debug(f"Selected paper count: {len(selected_ids)}, Total papers: {len(papers)}")
+
+    if not selected_ids:
+        logger.warning("No papers selected for QA")
+        return "No papers selected for QA. Please select papers first."
+
     # If user selected specific papers, use those for QA
     qa_state = {
         "messages": [HumanMessage(content=user_query)],
         "papers": papers,
+        "selected_paper_ids": selected_ids,
+        "user_query": user_query,
     }
 
-    if selected_ids:
-        qa_state["selected_ids"] = selected_ids
-        print(f"📌 [ANSWER_QUESTION] Using {len(selected_ids)} user-selected papers for QA")
-
-    # result = qa_graph.invoke(qa_state)
-    # return result["messages"][-1].content
-
-    # Placeholder response until QA graph is fully implemented
-    context_note = f" focusing on {len(selected_ids)} selected papers" if selected_ids else ""
-    return f"Analysis complete{context_note}. The papers address your question."
+    logger.debug("Invoking QA graph")
+    result = qa_graph.invoke(qa_state)
+    logger.info("QA graph completed successfully")
+    return result["final_answer"]
 
 def query_clarification(state: State):
+    logger.debug("Query clarification node invoked")
+    step_message = AIMessage(id=str(uuid.uuid4()), content="")
+    test_ui_message = push_ui_message(
+        "steps",
+        {
+            "steps": [
+                {
+                    "id": "find_papers",
+                    "label": "Finding papers",
+                    "status": "running",
+                    "description": f"testing",
+                },
+                {
+                    "id": "find_papers",
+                    "label": "Finding papers",
+                    "status": "running",
+                    "description": f"testing",
+                },{
+                    "id": "find_papers",
+                    "label": "Finding papers",
+                    "status": "running",
+                    "description": f"testing",
+                },
+                {
+                    "id": "find_papers",
+                    "label": "Finding papers",
+                    "status": "running",
+                    "description": f"testing",
+                }
+            ],
+            "currentStep": "find_papers",
+        },
+        message=step_message
+    )
+    logger.info(f"[query_clarification] Pushed step tracking UI message: {test_ui_message['id']}")
     system_prompt = f"""
     You are an expert in clarifying user queries for a research assistant.
     You need to decide if the user's query is clear or it needs clarification.
     Take the previous messages into account if there is any.
     Make the decision and provide your reasoning for the decision.
     """
-    
+
     class QueryIsClear(BaseModel):
         reasoning: str = Field(description="The reasoning why the user's query is clear")
 
     class QueryNeedsClarification(BaseModel):
         reasoning: str = Field(description="The reasoning why the user's query needs clarification")
         clarification: str = Field(description="The clarification for the user's query")
-    
+
     tools = [QueryIsClear, QueryNeedsClarification]
     structured_model = supervisor_model.bind_tools(tools, tool_choice="any")
     msg = structured_model.invoke([
         SystemMessage(content=system_prompt)
     ] + state["messages"])
-    
+
     response = msg.tool_calls[0]["args"]
 
     if "clarification" not in response:
-        return {"is_clear": True}
+        logger.info("Query is clear, proceeding to optimization")
+        return {"is_clear": True, "messages": [step_message]}
     else:
-        return {"messages": [AIMessage(content=response["clarification"])], "is_clear": False}
+        logger.info("Query needs clarification, requesting user input")
+        logger.debug(f"Clarification requested: {response['clarification'][:100]}...")
+        return {
+            "messages": [step_message, AIMessage(content=response["clarification"])],
+            "is_clear": False
+        }
 
 def query_optimization(state: State):
+    logger.debug("Query optimization node invoked")
+
     system_prompt = f"""
     You are an expert in optimizing user queries for a search agent for academic papers.
     Your goals is to rephrase the user query to be more specific and to be more likely to help the subagent find the most relevant papers and answer the user's question.
@@ -114,6 +168,7 @@ def query_optimization(state: State):
     """
 
     class QueryOptimizationOutput(BaseModel):
+
         reasoning: str = Field(description="The reasoning for your optimization")
         optimized_query: str = Field(description="The optimized query for the user's query")
 
@@ -124,8 +179,11 @@ def query_optimization(state: State):
     ] + state["messages"])
     response = msg.tool_calls[0]["args"]
 
+    logger.info(f"Query optimized: {response['optimized_query'][:100]}{'...' if len(response['optimized_query']) > 100 else ''}")
+    logger.debug(f"Optimization reasoning: {response['reasoning'][:150]}...")
+
     message = f"The optimized query is: {response['optimized_query']}\n\nReasoning: {response['reasoning']}"
-    
+
     return {"messages": [AIMessage(content=message)], "optimized_query": response['optimized_query']}
 
 def should_clarify(state: State):
@@ -170,76 +228,78 @@ def supervisor_agent_node(state: State):
     2. If so, extracts papers and calls push_ui_message
     3. Otherwise, invokes the model to decide next action
     """
+    logger.debug("Supervisor agent node invoked")
 
     messages = state["messages"]
     last_message = messages[-1] if messages else None
-    
+
     # ========================================
     # POST-PROCESSING: Handle tool results
     # ========================================
     if isinstance(last_message, ToolMessage):
-        print(f"📝 [SUPERVISOR NODE] Post-processing ToolMessage from: {last_message.name}")
-        
+        logger.info(f"Post-processing ToolMessage from: {last_message.name}")
+
         if last_message.name == "find_papers":
             papers = state.get("papers", [])
-            
+            logger.debug(f"Retrieved {len(papers)} papers from state")
+
             if papers and "found" in last_message.content.lower() and "papers" in last_message.content.lower():
-                print(f"🎨 [SUPERVISOR NODE] Pushing UI message with {len(papers)} papers")
-                
+                logger.info(f"Pushing UI message with {len(papers)} papers")
+
                 try:
                     # Convert S2Paper objects to dicts if needed
                     papers_data = [p.model_dump() if hasattr(p, 'model_dump') else p for p in papers]
-                    
+                    logger.debug(f"Converted {len(papers_data)} papers to dict format")
+
                     # Create AI message
                     ai_message = AIMessage(
                         id=str(uuid.uuid4()),
                         content=f"I found {len(papers)} papers for your query.",
                     )
-                    
+
                     # Push UI message FROM NODE (officially supported!)
                     ui_msg = push_ui_message(
-                        "papers", 
-                        {"papers": papers_data}, 
+                        "papers",
+                        {"papers": papers_data},
                         message=ai_message
                     )
-                    
-                    print(f"[OK] [SUPERVISOR NODE] UI message pushed successfully: {ui_msg['id']}")
-                    
+
+                    logger.info(f"UI message pushed successfully: {ui_msg['id']}")
+
                     # Return AI message to state and continue to next plan step
                     return {"messages": [ai_message]}
-                
+
                 except Exception as e:
-                    print(f"[ERROR] [SUPERVISOR NODE] Failed to push UI message: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Failed to push UI message: {e}", exc_info=True)
                     # Continue to next plan step even if UI push fails
                     return {}
             else:
                 # No papers or unexpected message format
-                print(f"⚠️ [SUPERVISOR NODE] find_papers returned but no papers found")
+                logger.warning("find_papers returned but no papers found or unexpected message format")
                 return {}
-                
+
         elif last_message.name == "answer_question":
-            print("✅ [SUPERVISOR NODE] answer_question completed")
+            logger.info("answer_question completed successfully")
             return {"messages": [AIMessage(content=last_message.content)]}
-            
+
         else:
-            print(f"⚠️ [SUPERVISOR NODE] Unknown tool call: {last_message.name}")
+            logger.warning(f"Unknown tool call: {last_message.name}")
             return {}
     
     # ========================================
     # PLAN GENERATION & EXECUTION
     # ========================================
     plan = state.get("plan_steps", [])
-    
+
     # Generate plan if it doesn't exist
     if len(plan) == 0:
-        print("📋 [SUPERVISOR NODE] Generating new plan")
+        logger.info("Generating new plan")
 
         # Check if user has selected specific papers
         selected_ids = state.get("selected_paper_ids", [])
         selected_context = ""
         if selected_ids:
+            logger.info(f"User has selected {len(selected_ids)} specific papers for focused analysis")
             selected_context = f"\n\nIMPORTANT: User has selected {len(selected_ids)} specific papers for focused analysis (IDs: {', '.join(selected_ids[:3])}{'...' if len(selected_ids) > 3 else ''}). Consider these papers when planning."
 
         plan_prompt = f"""
@@ -251,12 +311,14 @@ def supervisor_agent_node(state: State):
         User query: {state.get("optimized_query", "")}
         Current papers: {get_paper_info_text(state.get("papers", []))}
         """
+        logger.debug("Invoking planner model")
         response = planner.invoke([
             SystemMessage(content=plan_prompt),
             HumanMessage(content=planner_context)
         ])
         plan_choice = response.tool_calls[0]["args"]["plan_choice"]
-        
+        logger.info(f"Planner chose: {plan_choice}")
+
         if plan_choice == "qa_only":
             plan = ["answer_question", "end"]
         elif plan_choice == "find_then_qa":
@@ -264,20 +326,21 @@ def supervisor_agent_node(state: State):
         elif plan_choice == "find_only":
             plan = ["find_papers", "end"]
         else:
+            logger.error(f"Invalid plan choice: {plan_choice}")
             raise ValueError(f"Invalid plan choice: {plan_choice}")
-        
-        print(f"📋 [SUPERVISOR NODE] Generated plan: {plan}")
-    
+
+        logger.info(f"Generated plan: {plan}")
+
     # Execute next step in plan
     if not plan:
-        print("⚠️ [SUPERVISOR NODE] Plan is empty, ending")
+        logger.warning("Plan is empty, ending execution")
         return {}
-    
+
     current_step = plan.pop(0)
-    print(f"🎯 [SUPERVISOR NODE] Executing plan step: {current_step}")
-    
+    logger.info(f"Executing plan step: {current_step}")
+
     if current_step == "end":
-        print("✅ [SUPERVISOR NODE] Plan completed")
+        logger.info("Plan completed successfully")
         return {}
     
     # Create manual tool call for the next step

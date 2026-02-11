@@ -13,7 +13,7 @@ import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
-import { PaperComponent, PaperListComponent } from "@/components/agent/ui";
+import { PaperComponent, PaperListComponent, StepTracker } from "@/components/agent/ui";
 
 function CustomComponent({
   message,
@@ -35,9 +35,10 @@ function CustomComponent({
           key={customComponent.id}
           stream={thread}
           message={customComponent}
-          components={{ 
+          components={{
             paper: PaperComponent as any,
-            papers: PaperListComponent as any
+            papers: PaperListComponent as any,
+            steps: StepTracker as any
           }}
           meta={{ ui: customComponent }}
         />

@@ -32,3 +32,4 @@ class QAAgentState(MessagesState):
     sufficient_evidence: bool
     user_query: str
     papers: List[S2Paper]
+    final_answer: str

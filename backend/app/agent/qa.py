@@ -225,7 +225,8 @@ Based on the above evidence and analysis, provide a concise yet complete answer 
     ])
     
     return {
-        "messages": [AIMessage(content=response.content)]
+        "messages": [AIMessage(content=response.content)],
+        "final_answer": response.content
     }
 
 def should_answer(state: QAAgentState) -> str:

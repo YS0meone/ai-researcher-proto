@@ -22,12 +22,19 @@ from langgraph.graph.ui import push_ui_message
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing import Literal, List
 from app.agent.utils import get_paper_info_text
+from app.agent.ui_manager import UIManager
+
+DO_NOT_RENDER_ID_PREFIX = "do-not-render-"
 
 # Initialize logging
 setup_logging()
 
 setup_langsmith()
 logger = logging.getLogger(__name__)
+
+step_tracking_message = None
+step_tracking_ui_id = None  # Store UI message ID globally
+ui_manager = None
 
 @tool
 def find_papers(runtime: ToolRuntime) -> Command:
@@ -87,41 +94,16 @@ def answer_question(runtime: ToolRuntime) -> str:
     return result["final_answer"]
 
 def query_clarification(state: State):
+    # create a message at the top for the step tracking
+    global step_tracking_message, step_tracking_ui_id, ui_manager
+    step_tracking_message_id = str(uuid.uuid4())  # Message ID (separate!)
+    step_tracking_ui_id = str(uuid.uuid4())  # UI component ID
+    step_tracking_message = AIMessage(id=step_tracking_message_id, content="")
+    ui_manager = UIManager(step_tracking_message, step_tracking_ui_id)
+
     logger.debug("Query clarification node invoked")
-    step_message = AIMessage(id=str(uuid.uuid4()), content="")
-    test_ui_message = push_ui_message(
-        "steps",
-        {
-            "steps": [
-                {
-                    "id": "find_papers",
-                    "label": "Finding papers",
-                    "status": "running",
-                    "description": f"testing",
-                },
-                {
-                    "id": "find_papers",
-                    "label": "Finding papers",
-                    "status": "running",
-                    "description": f"testing",
-                },{
-                    "id": "find_papers",
-                    "label": "Finding papers",
-                    "status": "running",
-                    "description": f"testing",
-                },
-                {
-                    "id": "find_papers",
-                    "label": "Finding papers",
-                    "status": "running",
-                    "description": f"testing",
-                }
-            ],
-            "currentStep": "find_papers",
-        },
-        message=step_message
-    )
-    logger.info(f"[query_clarification] Pushed step tracking UI message: {test_ui_message['id']}")
+    ui_manager.update_step("query_clarification", "running")
+    # logger.info(f"[query_clarification] Pushed step tracking UI message: {test_ui_message['id']}")
     system_prompt = f"""
     You are an expert in clarifying user queries for a research assistant.
     You need to decide if the user's query is clear or it needs clarification.
@@ -146,22 +128,31 @@ def query_clarification(state: State):
 
     if "clarification" not in response:
         logger.info("Query is clear, proceeding to optimization")
-        return {"is_clear": True, "messages": [step_message]}
+        ui_manager.update_step("query_clarification", "clear")
+        return {
+            "messages": [step_tracking_message],
+            "is_clear": True
+        }
     else:
         logger.info("Query needs clarification, requesting user input")
         logger.debug(f"Clarification requested: {response['clarification'][:100]}...")
+        ui_manager.update_step("query_clarification", "unclear")
         return {
-            "messages": [step_message, AIMessage(content=response["clarification"])],
+            "messages": [step_tracking_message, AIMessage(content=response["clarification"])],
             "is_clear": False
         }
 
 def query_optimization(state: State):
+    global ui_manager
     logger.debug("Query optimization node invoked")
+    ui_manager.update_step("query_optimization", "running")
 
     system_prompt = f"""
     You are an expert in optimizing user queries for a search agent for academic papers.
     Your goals is to rephrase the user query to be more specific and to be more likely to help the subagent find the most relevant papers and answer the user's question.
     There might be some clarification happened before this node, you should take that into account.
+    There are two types of queries:
+    
     If the user's query is good enough, you may repeat the user's query as the optimized query or change it slightly to be more specific.
     If the user's query is not good enough, you should optimize it.
     The optimized query should be self-contained and should not require any additional context.
@@ -181,10 +172,13 @@ def query_optimization(state: State):
 
     logger.info(f"Query optimized: {response['optimized_query'][:100]}{'...' if len(response['optimized_query']) > 100 else ''}")
     logger.debug(f"Optimization reasoning: {response['reasoning'][:150]}...")
-
+    ui_manager.update_step("query_optimization", "completed", response['optimized_query'])
     message = f"The optimized query is: {response['optimized_query']}\n\nReasoning: {response['reasoning']}"
 
-    return {"messages": [AIMessage(content=message)], "optimized_query": response['optimized_query']}
+    return {
+        "messages": [AIMessage(id=DO_NOT_RENDER_ID_PREFIX + str(uuid.uuid4()), content=message)], 
+        "optimized_query": response['optimized_query']
+    }
 
 def should_clarify(state: State):
     is_clear = state.get("is_clear", True)
@@ -227,12 +221,16 @@ def supervisor_agent_node(state: State):
     1. Checks if last message is a ToolMessage from find_papers
     2. If so, extracts papers and calls push_ui_message
     3. Otherwise, invokes the model to decide next action
+
+    Note: Messages with id starting with "do-not-render-" are hidden from UI
+    but remain in history for model reasoning.
     """
+    global ui_manager
+
     logger.debug("Supervisor agent node invoked")
 
     messages = state["messages"]
     last_message = messages[-1] if messages else None
-
     # ========================================
     # POST-PROCESSING: Handle tool results
     # ========================================
@@ -254,7 +252,7 @@ def supervisor_agent_node(state: State):
                     # Create AI message
                     ai_message = AIMessage(
                         id=str(uuid.uuid4()),
-                        content=f"I found {len(papers)} papers for your query.",
+                        content="",
                     )
 
                     # Push UI message FROM NODE (officially supported!)
@@ -265,6 +263,9 @@ def supervisor_agent_node(state: State):
                     )
 
                     logger.info(f"UI message pushed successfully: {ui_msg['id']}")
+
+                    # Update step tracker to show find_papers is completed
+                    ui_manager.update_step("find_papers", "completed", len(papers))
 
                     # Return AI message to state and continue to next plan step
                     return {"messages": [ai_message]}
@@ -280,6 +281,7 @@ def supervisor_agent_node(state: State):
 
         elif last_message.name == "answer_question":
             logger.info("answer_question completed successfully")
+            ui_manager.update_step("answer_question", "completed")
             return {"messages": [AIMessage(content=last_message.content)]}
 
         else:
@@ -294,7 +296,7 @@ def supervisor_agent_node(state: State):
     # Generate plan if it doesn't exist
     if len(plan) == 0:
         logger.info("Generating new plan")
-
+        ui_manager.update_step("plan", "running")
         # Check if user has selected specific papers
         selected_ids = state.get("selected_paper_ids", [])
         selected_context = ""
@@ -318,7 +320,7 @@ def supervisor_agent_node(state: State):
         ])
         plan_choice = response.tool_calls[0]["args"]["plan_choice"]
         logger.info(f"Planner chose: {plan_choice}")
-
+        ui_manager.update_step("plan", "completed", plan_choice)
         if plan_choice == "qa_only":
             plan = ["answer_question", "end"]
         elif plan_choice == "find_then_qa":
@@ -342,7 +344,12 @@ def supervisor_agent_node(state: State):
     if current_step == "end":
         logger.info("Plan completed successfully")
         return {}
-    
+
+    # Update UI to show the step is starting
+    if current_step == "find_papers":
+        ui_manager.update_step("find_papers", "running")
+    elif current_step == "answer_question":
+        ui_manager.update_step("answer_question", "running")
     # Create manual tool call for the next step
     manual_tool_call = {
         "name": current_step,

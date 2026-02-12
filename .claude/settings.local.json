@@ -6,7 +6,8 @@
       "Bash(uv run:*)",
       "mcp__langchain_docs__SearchDocsByLangChain",
       "WebSearch",
-      "Bash(pnpm type-check:*)"
+      "Bash(pnpm type-check:*)",
+      "mcp__docs-mcp-server__search_docs"
     ]
   }
 }

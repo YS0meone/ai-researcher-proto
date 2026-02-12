@@ -18,6 +18,7 @@ from pydantic import ConfigDict
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage
 from typing import Literal
+from app.agent.utils import get_paper_abstract
 
 filter_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
@@ -63,13 +64,6 @@ def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, 
         index_to_keep = [int(decision) + i for decision in llm_document_filter_response.decisions]
         results.extend(index_to_keep)
     return results
-
-def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> Dict[str, str]:
-    abstracts = {}
-    for paper in papers:
-        if paper.paperId in selected_paper_ids:
-            abstracts[paper.paperId] = paper.abstract
-    return abstracts
 
 
 @tool

@@ -108,7 +108,7 @@ def get_find_papers_step(status: Literal["running", "completed"], num_papers: in
     }
     return FIND_PAPERS_COMPLETED
 
-def get_answer_question_step(status: Literal["running", "completed"]):
+def get_retrieve_and_answer_question_step(status: Literal["running", "completed"]):
     ANSWER_QUESTION_RUNNING = {
     "id": "Answer question",
     "label": "Answer question",
@@ -131,7 +131,7 @@ step_map = {
     "query_optimization": (1, get_query_optimization_step),
     "plan": (2, get_plan_step),
     "find_papers": (3, get_find_papers_step),
-    "answer_question": (4, get_answer_question_step),
+    "retrieve_and_answer_question": (4, get_retrieve_and_answer_question_step),
 }
 
 class UIManager:

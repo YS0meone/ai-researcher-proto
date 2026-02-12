@@ -73,10 +73,12 @@ def search_agent_node(state: SearchAgentState):
     4. Paper details (get_paper_details): Check what papers are currently in your paper list.
     
     Strategy tips:
-    - Start with web search if topic is unfamiliar to get context
-    - Use academic database for targeted searches with filters
-    - Use citation chasing to expand from good seed papers you've found
-    - Check paper details to avoid redundant searches
+    - If the user query is about a specific paper, use the academic database search with the title/author filters to find the paper and quickly finish the task.
+    - If the user query is more general, you should follow the following strategy:
+        - Start with web search if topic is unfamiliar to get context
+        - Use academic database for targeted searches with filters
+        - Use citation chasing to expand from good seed papers you've found
+        - Check paper details to avoid redundant searches
     
     Reflect on past actions and completed steps to decide what to do next.
     If you have sufficient results, stop and provide a concise summary of what you found.

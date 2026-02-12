@@ -2,10 +2,17 @@ from semanticscholar import SemanticScholar
 from app.core.config import settings
 from app.db.schema import S2Paper
 from typing import List, Union
+import time
 
 class S2Client:
     def __init__(self):
-        self.client = SemanticScholar(api_key=settings.S2_API_KEY)
+        # Configure with longer timeout and rate limit handling
+        self.client = SemanticScholar(
+            api_key=settings.S2_API_KEY,
+            timeout=30,  # Increase timeout to 30 seconds
+            # Note: The library automatically retries arXiv queries,
+            # but will gracefully fall back to S2-only data on HTTP 429
+        )
     
 
     def convert_to_s2_paper(self, result_item) -> S2Paper:

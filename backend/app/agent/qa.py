@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 from app.agent.states import State
 from app.agent.utils import get_user_query, setup_langsmith
 from app.core.config import settings         
-from app.tools.search import retrieve_evidence_from_selected_papers, get_paper_abstract
+from app.tools.search import retrieve_evidence_from_selected_papers
+from app.agent.utils import get_paper_abstract
 import logging
 import sys
 import json
@@ -21,13 +22,6 @@ setup_langsmith()
 
 qa_model = init_chat_model(model=settings.QA_AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
 
-
-def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> Dict[str, str]:
-    abstracts = {}
-    for paper in papers:
-        if paper.paperId in selected_paper_ids:
-            abstracts[paper.paperId] = paper.abstract
-    return abstracts
 
 def qa_retrieve(state: QAAgentState) -> QAAgentState:
     user_query = state.get("user_query", "")
@@ -201,7 +195,7 @@ Limitation of the retrieved evidence:
 Retrieved evidences:
 {evidences_text}
 
-Based on the above evidence and analysis, provide a concise yet complete answer to the user's question. If the evidence is insufficient, acknowledge the limitations."""
+Based on the above evidence and analysis, provide a concise and clear answer to the user's question. If the evidence is insufficient, acknowledge the limitations."""
 
     answer_system = """You are an expert research assistant that helps answer user questions.
     The user question is usually a research question about several selected papers and the paper abstracts are the ones of the selected papers.
@@ -213,10 +207,11 @@ Based on the above evidence and analysis, provide a concise yet complete answer 
     - You need to provide a follow-up suggestions if the evidence is insufficient.
 
     General Strategy:
-    - YOU SHOULD DIRECTLY ANSWER THE USER'S QUESTION FIRST, THEN PROVIDE THE EVIDENCE TO SUPPORT YOUR ANSWER.
-    - If the answer is present in the retrieved evidence, you extract the answer from the evidence.
-    - BE BRIEF, CONCISE AND FACTUALLY CONSISTENT, DON'T PROVIDE UNNECESSARY INFORMATION.
-    - If the question is simple or can be extracted from the evidence. Answer the question as short as possible.
+    - If the answer is present in the retrieved evidence, you would try to extract the answer from the evidence as much as possible.
+    - Limitation, evidences are not known to the users so you should not assume they have access to the evidences.
+    - Don't abuse the bullet points
+    - Don't abuse the headings and subheadings to show the structure of the answer. 
+    
     """
 
     response = qa_model.invoke([

@@ -297,3 +297,19 @@ class QdrantService:
             }
         )
         return results
+
+    def check_paper_exists(self, paper_id: str) -> bool:
+        result = self.client.count(
+            collection_name=self.config.collection,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.id",
+                        match=MatchAny(any=[paper_id])
+                    )
+                ]
+            ),
+            exact=True,
+        )
+        logger.info(f"check_paper_exists({paper_id!r}): count={result.count}")
+        return result.count > 0

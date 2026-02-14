@@ -6,7 +6,6 @@ from app.services.qdrant import QdrantService
 import arxiv
 import re
 from pathlib import Path
-from pprint import pprint
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +34,17 @@ def ingest_paper_task(self, paper_dict: dict) -> dict:
     """
     paper = S2Paper(**paper_dict)
     qdrant = _get_qdrant_service()
-    pprint(paper)
+    logger.info(f"[ingest] paperId={paper.paperId!r} title={paper.title!r}")
 
+    if qdrant.check_paper_exists(paper.paperId):
+        logger.info(f"Paper {paper.paperId} already exists in Qdrant, skipping ingestion")
+        return {
+            "paperId": paper.paperId,
+            "method": "skipped",
+            "chunk_count": 0,
+            "success": True,
+        }
+    
     # Try to search the paper in arxiv for downloading
     arxiv_paper = None
     try:

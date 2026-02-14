@@ -79,8 +79,12 @@ async def get_task_status(task_id: str):
     return await asyncio.to_thread(_check_task, task_id)
 
 
+class BatchStatusRequest(BaseModel):
+    task_ids: list[str]
+
+
 @app.post("/ingest/status/batch")
-async def get_batch_status(task_ids: list[str]):
+async def get_batch_status(req: BatchStatusRequest):
     """Check the status of multiple ingestion tasks at once."""
-    statuses = [await asyncio.to_thread(_check_task, tid) for tid in task_ids]
+    statuses = [await asyncio.to_thread(_check_task, tid) for tid in req.task_ids]
     return {"statuses": statuses}

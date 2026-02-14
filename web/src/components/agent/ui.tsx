@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { usePaperSelection, PaperData } from "@/providers/PaperSelection";
 
@@ -122,9 +122,16 @@ interface PaperListComponentProps {
 }
 
 interface IngestStatus {
-  status: 'idle' | 'ingesting' | 'success' | 'error';
+  status: 'idle' | 'ingesting' | 'processing' | 'success' | 'error';
   message?: string;
   taskIds?: { paperId: string; taskId: string }[];
+}
+
+interface TaskPollStatus {
+  paperId: string;
+  taskId: string;
+  state: 'PENDING' | 'STARTED' | 'SUCCESS' | 'FAILURE';
+  result?: { method?: string; chunk_count?: number; success?: boolean; error?: string } | null;
 }
 
 export const PaperListComponent = (props: PaperListComponentProps) => {
@@ -132,7 +139,79 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
   const { selectPaper } = usePaperSelection(); // Only used to add to persistent list after ingestion
   const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
+  const [taskStatuses, setTaskStatuses] = useState<TaskPollStatus[]>([]);
   const backendApiUrl = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:2024';
+
+  // Poll task statuses until all are terminal
+  useEffect(() => {
+    const tasks = ingestStatus.taskIds;
+    console.log('[ingest poll] useEffect fired, taskIds:', tasks);
+    if (!tasks || tasks.length === 0) return;
+
+    const TERMINAL = new Set(['SUCCESS', 'FAILURE']);
+    let stopped = false;
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        console.log('[ingest poll] fetching status for', tasks.length, 'tasks');
+        const response = await fetch(`${backendApiUrl}/ingest/status/batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_ids: tasks.map(t => t.taskId) }),
+        });
+        if (!response.ok) {
+          console.warn('[ingest poll] bad response', response.status, await response.text());
+          return;
+        }
+        const data = await response.json();
+        console.log('[ingest poll] statuses:', data);
+        const statuses: TaskPollStatus[] = data.statuses.map((s: any, i: number) => ({
+          paperId: tasks[i].paperId,
+          taskId: tasks[i].taskId,
+          state: s.state,
+          result: s.result,
+        }));
+        setTaskStatuses(prev => {
+          const updated = [...prev];
+          for (const s of statuses) {
+            const idx = updated.findIndex(t => t.taskId === s.taskId);
+            if (idx >= 0) updated[idx] = s; else updated.push(s);
+          }
+          return updated;
+        });
+
+        if (statuses.every(s => TERMINAL.has(s.state))) {
+          stopped = true;
+          clearInterval(intervalId);
+          const failed = statuses.filter(s => s.state === 'FAILURE' || s.result?.success === false).length;
+          const skipped = statuses.filter(s => s.result?.method === 'skipped').length;
+          const ingested = statuses.length - failed - skipped;
+          const parts: string[] = [];
+          if (ingested > 0) parts.push(`${ingested} ingested`);
+          if (skipped > 0) parts.push(`${skipped} already existed`);
+          if (failed > 0) parts.push(`${failed} failed`);
+          setIngestStatus(prev => ({
+            ...prev,
+            status: failed === statuses.length ? 'error' : 'success',
+            message: parts.join(', '),
+          }));
+          if (failed > 0) {
+            toast.error('Some papers failed to ingest', { description: parts.join(', ') });
+          } else {
+            toast.success('Ingestion complete', { description: parts.join(', ') });
+          }
+        }
+      } catch (_) {
+        // silently ignore transient poll errors
+      }
+    };
+
+    poll(); // immediate first poll
+    intervalId = setInterval(poll, 2000);
+    return () => { stopped = true; clearInterval(intervalId); };
+  }, [ingestStatus.taskIds]);
 
   if (!props.papers || paperCount === 0) {
     return (
@@ -201,18 +280,15 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
         selectPaper(paperData);
       });
 
+      console.log('[ingest] /ingest response:', result);
       setIngestStatus({
-        status: 'success',
-        message: `Successfully added ${tempSelected.size} paper(s) to your list!`,
+        status: 'processing',
+        message: `Processing ${result.tasks?.length ?? tempSelected.size} paper(s)…`,
         taskIds: result.tasks,
       });
 
-      // Show success toast with info about ingestion
-      const newlyIngested = result.tasks?.filter((t: any) => t.status === 'queued').length || 0;
-      toast.success('Papers Added to Your List', {
-        description: newlyIngested > 0
-          ? `${tempSelected.size} paper(s) added. ${newlyIngested} new paper(s) are being processed in the background.`
-          : `${tempSelected.size} paper(s) added to your list.`,
+      toast.success('Papers queued for ingestion', {
+        description: `${result.tasks?.length ?? tempSelected.size} paper(s) are being processed in the background.`,
       });
 
       // Clear temporary selections
@@ -236,55 +312,129 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900">
-          📚 Found {paperCount} Paper{paperCount !== 1 ? 's' : ''}
-        </h3>
-        <span className="text-sm text-gray-600">
-          {selectedCount > 0 ? `${selectedCount} selected` : 'Select papers to add to your list'}
-        </span>
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">
+              Found {paperCount} Paper{paperCount !== 1 ? 's' : ''}
+            </h3>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {selectedCount > 0
+                ? `${selectedCount} paper${selectedCount !== 1 ? 's' : ''} selected`
+                : 'Check papers below to add them to your list'}
+            </p>
+          </div>
+          <button
+            onClick={handleAddToPaperList}
+            disabled={selectedCount === 0 || ingestStatus.status === 'ingesting'}
+            className={`px-3.5 py-1.5 rounded-md font-medium transition-all duration-200 text-sm ${
+              selectedCount === 0 || ingestStatus.status === 'ingesting'
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-900 text-white hover:bg-black active:scale-95'
+            }`}
+          >
+            {ingestStatus.status === 'ingesting' ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Adding…
+              </span>
+            ) : selectedCount > 0 ? `Add ${selectedCount} to list` : 'Add to list'}
+          </button>
+        </div>
       </div>
 
-      {/* Action Bar with Add Button */}
-      {selectedCount > 0 && (
-        <div className="flex flex-col gap-2 bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleAddToPaperList}
-              disabled={ingestStatus.status === 'ingesting'}
-              className={`px-4 py-2 rounded-md font-medium text-white transition-all duration-200 ${
-                ingestStatus.status === 'ingesting'
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-gray-900 hover:bg-black active:scale-95'
-              }`}
-            >
-              {ingestStatus.status === 'ingesting' ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Adding...
-                </span>
+      {/* Progress / Status Panel */}
+      {(taskStatuses.length > 0 || ingestStatus.status === 'ingesting' || ingestStatus.status === 'processing') && (
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+            <div className="flex items-center gap-2">
+              {ingestStatus.status === 'processing' || ingestStatus.status === 'ingesting' ? (
+                <svg className="w-3.5 h-3.5 text-gray-500 animate-spin" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
               ) : (
-                `Add ${selectedCount} to Paper List`
+                <svg className="w-3.5 h-3.5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
               )}
-            </button>
-
-            {ingestStatus.message && (
-              <span className={`text-sm ${
-                ingestStatus.status === 'success' ? 'text-gray-900' :
-                ingestStatus.status === 'error' ? 'text-red-600' :
-                'text-gray-600'
-              }`}>
-                {ingestStatus.message}
+              <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Ingestion Status</span>
+            </div>
+            {taskStatuses.length > 0 && (
+              <span className="text-xs text-gray-500">
+                {taskStatuses.filter(t => t.state === 'SUCCESS' || t.state === 'FAILURE').length} / {taskStatuses.length}
               </span>
             )}
           </div>
 
-          <p className="text-xs text-gray-500">
-            New papers will be processed and added to your database in the background
-          </p>
+          {/* Progress bar */}
+          {taskStatuses.length > 0 && (() => {
+            const total = taskStatuses.length;
+            const done = taskStatuses.filter(t => t.state === 'SUCCESS' || t.state === 'FAILURE').length;
+            const pct = Math.round((done / total) * 100);
+            return (
+              <div className="h-0.5 bg-gray-100">
+                <div
+                  className="h-full bg-gray-400 transition-all duration-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            );
+          })()}
+
+          {/* Rows */}
+          <div className="px-4 py-2 space-y-1.5">
+            {taskStatuses.length === 0 && (
+              <p className="text-xs text-gray-400 py-1">Preparing tasks…</p>
+            )}
+            {taskStatuses.map(ts => {
+              const isSuccess = ts.state === 'SUCCESS' && ts.result?.method !== 'skipped';
+              const isSkipped = ts.state === 'SUCCESS' && ts.result?.method === 'skipped';
+              const isFailed = ts.state === 'FAILURE' || ts.result?.success === false;
+              const isActive = ts.state === 'STARTED';
+
+              const dot = isSuccess
+                ? <span className="w-1.5 h-1.5 rounded-full bg-gray-900 shrink-0" />
+                : isSkipped
+                ? <span className="w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
+                : isFailed
+                ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
+                : isActive
+                ? <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse shrink-0" />
+                : <span className="w-1.5 h-1.5 rounded-full border border-gray-300 shrink-0" />;
+
+              const label = isSuccess ? 'ingested'
+                : isSkipped ? 'already in database'
+                : isFailed ? 'failed'
+                : isActive ? 'processing…'
+                : 'queued…';
+
+              const labelColor = isSuccess ? 'text-gray-900 font-medium'
+                : isSkipped ? 'text-gray-400'
+                : isFailed ? 'text-red-600 font-medium'
+                : 'text-gray-400';
+
+              const paper = props.papers.find(p => p.paperId === ts.paperId);
+              return (
+                <div key={ts.taskId} className="flex items-center gap-2.5 text-xs py-0.5">
+                  {dot}
+                  <span className={`${labelColor} w-32 shrink-0`}>{label}</span>
+                  <span className="text-gray-500 truncate">{paper?.title ?? ts.paperId}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Footer summary */}
+          {ingestStatus.message && ingestStatus.status !== 'processing' && (
+            <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
+              <p className="text-xs text-gray-500">{ingestStatus.message}</p>
+            </div>
+          )}
         </div>
       )}
 

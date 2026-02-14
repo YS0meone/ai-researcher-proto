@@ -1,20 +1,16 @@
-from typing import Dict, List, Any, Optional
+
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
-from app.agent.states import State
-from app.agent.utils import get_user_query, setup_langsmith
+from app.agent.utils import setup_langsmith
 from app.core.config import settings         
 from app.tools.search import retrieve_evidence_from_selected_papers
 from app.agent.utils import get_paper_abstract
 import logging
 import sys
-import json
 from typing import Union
 from app.agent.states import QAAgentState
-from app.db.schema import S2Paper
 from langgraph.graph import StateGraph, END, START
 
 logger = logging.getLogger(__name__)

@@ -1,18 +1,23 @@
-from typing import Annotated, List, Dict, Any, Optional, Literal, TypedDict, Tuple, Sequence
+from typing import Annotated, List, Dict, Any, Optional, Literal, Tuple, Sequence
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
+from langchain.messages import AIMessage
 import operator
 from langchain.agents import AgentState
 from app.db.schema import S2Paper
 from langchain_core.documents import Document
 from langgraph.graph.message import MessagesState
+from app.agent.ui_types import Step
 
-class State(AgentState):
+class SupervisorState(AgentState):
     optimized_query: Optional[str]
     is_clear: Optional[bool]
     papers: List[S2Paper]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
     plan_steps: List[Literal["answer_question", "find_papers", "end"]]
     selected_paper_ids: List[str]
+    ui_tracking_message: AIMessage
+    ui_tracking_id: str
+    steps: List[Step]
 
 
 class PaperFinderState(MessagesState):

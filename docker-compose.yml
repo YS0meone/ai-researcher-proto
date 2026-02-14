@@ -1,95 +1,16 @@
 services:
-  postgres:
-    image: postgres:17
-    container_name: aira-postgres
-    profiles:
-      - legacy
-    environment:
-      POSTGRES_DB: ai_researcher
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:latest
+    container_name: aira-redis
     restart: always
+    ports:
+      - "6379:6379"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_researcher"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # Optional: Add pgAdmin for database management
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: aira-pgadmin
-    profiles:
-      - legacy
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-    depends_on:
-      - postgres
-    restart: always
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.1.4}
-    container_name: es01
-    volumes:
-      - esdata01:/usr/share/elasticsearch/data
-    ports:
-      - ${ES_PORT:-9200}:9200
-    environment:
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
-      - node.name=es01
-      - cluster.name=${CLUSTER_NAME:-aira-cluster}
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - xpack.security.enabled=false
-      - xpack.security.enrollment.enabled=false
-      - xpack.license.self_generated.type=${LICENSE:-basic}
-      - xpack.ml.use_auto_machine_memory_percent=true
-    mem_limit: ${MEM_LIMIT:-4g}
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -s http://localhost:9200 >/dev/null",
-        ]
-      interval: 10s
-      timeout: 10s
-      retries: 120
-
-  kibana:
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-9.1.4}
-    volumes:
-      - kibanadata:/usr/share/kibana/data
-    ports:
-      - ${KIBANA_PORT:-5601}:5601
-    environment:
-      - SERVERNAME=kibana
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    mem_limit: ${KIBANA_MEM_LIMIT:-3g}
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
-        ]
-      interval: 10s
-      timeout: 10s
-      retries: 120
-
-  # Grobid service for PDF parsing
   grobid:
     image: grobid/grobid:0.8.2-crf
     container_name: aira-grobid
@@ -105,6 +26,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: aira-qdrant
@@ -116,11 +38,5 @@ services:
       - qdrant_data:/qdrant/storage
 
 volumes:
-  esdata01:
-    driver: local
-  kibanadata:
-    driver: local
-  postgres_data:
-    driver: local
   qdrant_data:
     driver: local

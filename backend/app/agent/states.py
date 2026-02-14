@@ -3,10 +3,9 @@ from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from langchain.messages import AIMessage
 import operator
 from langchain.agents import AgentState
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper, Step
 from langchain_core.documents import Document
 from langgraph.graph.message import MessagesState
-from app.agent.ui_types import Step
 
 class SupervisorState(AgentState):
     optimized_query: Optional[str]

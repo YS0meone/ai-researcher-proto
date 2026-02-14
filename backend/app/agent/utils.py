@@ -2,7 +2,7 @@ from app.core.config import settings
 import os
 import time
 from typing import List, Dict
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 
 def timer(func):
     def wrapper(*args, **kwargs):
@@ -35,9 +35,3 @@ def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> 
         if paper.paperId in selected_paper_ids:
             abstracts[paper.paperId] = paper.abstract
     return abstracts
-
-def setup_langsmith():
-    os.environ["LANGCHAIN_TRACING_V2"] = str(settings.LANGSMITH_TRACING_V2)
-    os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
-    os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
-    

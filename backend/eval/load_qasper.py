@@ -1,25 +1,17 @@
 from tqdm import tqdm
-from pprint import pprint
 from typing import Literal, Optional, TypedDict
-from huggingface_hub import login
 from app.core.config import settings
-from mlcroissant import Dataset
 import pandas as pd
 from pathlib import Path
-from app.db.schema import ArxivPaper
-from app.services.elasticsearch import ElasticsearchService
+from app.core.schema import ArxivPaper
 from app.services.qdrant import QdrantService
 from app.core.config import settings
 from numpy.typing import NDArray
 from langsmith import Client
-from app.agent.utils import setup_langsmith
-
-setup_langsmith()
 client = Client()
 
 dataset_name = "qasper-qa-e2e"
 
-es_service = ElasticsearchService(settings.elasticsearch_config)
 qdrant_service = QdrantService(settings.qdrant_config)
 
 class FullText(TypedDict):
@@ -70,7 +62,6 @@ def load_qasper_to_db(papers_df: pd.DataFrame) -> ArxivPaper:
         d = row.to_dict()
         paper = convert_to_ArxivPaper(d)
         flattened_paragraphs = [para for section in d["full_text"]["paragraphs"] for para in section] + [cap for cap in d["figures_and_tables"]["caption"]]
-        es_service.add_paper(paper)
         qdrant_service.add_paper_with_chunks(paper, flattened_paragraphs)
 
 def create_examples(dataset_id: str, paper_id: str, raw_data: QasperPaper) -> bool:
@@ -81,13 +72,7 @@ def create_examples(dataset_id: str, paper_id: str, raw_data: QasperPaper) -> bo
         ground_truth_evidence = None
         answer_data = answer["answer"][0]
         answer_type = None
-        # print("question: ", question)
-        # print("unanswerable: ", answer_data["unanswerable"], type(answer_data["unanswerable"]))
-        # print("yes_no: ", answer_data["yes_no"], type(answer_data["yes_no"]))
-        # print("free_form_answer: ", answer_data["free_form_answer"], type(answer_data["free_form_answer"]))
-        # print("evidence: ", answer_data["evidence"], type(answer_data["evidence"]))
-        # print("extractive_spans: ", answer_data["extractive_spans"], type(answer_data["extractive_spans"]))
-        # print("--------------------------------")
+
         if answer_data.get("unanswerable", False):
             ground_truth_answer = "Given the provided context, the question is unanswerable."
             answer_type = "unanswerable"

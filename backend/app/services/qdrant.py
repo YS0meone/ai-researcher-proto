@@ -8,7 +8,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 from qdrant_client.http.models import Distance, VectorParams
 from langchain_huggingface import HuggingFaceEmbeddings
-from app.db.schema import ArxivPaper, S2Paper
+from app.core.schema import ArxivPaper
+from app.core.schema import S2Paper
 import arxiv
 from pathlib import Path
 import logging

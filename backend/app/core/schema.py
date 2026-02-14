@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, TypedDict
 from datetime import datetime
+from enum import Enum
+
 
 class ArxivPaper(BaseModel):
     """Pydantic model for ArXiv paper data matching the exact schema."""
@@ -51,10 +53,13 @@ class ArxivPaperBatch(BaseModel):
         """Convert all papers to Elasticsearch document format."""
         return [paper.to_elasticsearch_doc() for paper in self.papers]
 
+# ── Semantic Scholar ──────────────────────────────────────────────────────────
+
 class S2Journal(BaseModel):
     name: Optional[str] = Field(None, description="Journal name")
     pages: Optional[str] = Field(None, description="Pages")
     volume: Optional[str] = Field(None, description="Volume")
+
 
 class S2PublicationVenue(BaseModel):
     alternate_names: Optional[list] = Field(None, description="Alternate names")
@@ -65,8 +70,9 @@ class S2PublicationVenue(BaseModel):
     type: Optional[str] = Field(None, description="Type")
     url: Optional[str] = Field(None, description="URL")
 
+
 class S2Paper(BaseModel):
-    """Pydantic model for Semantic Schlar paper data matching the official schema."""
+    """Pydantic model for Semantic Scholar paper data matching the official schema."""
     abstract: Optional[str] = Field(None, description="Paper abstract")
     authors: Optional[list] = Field(None, description="List of authors")
     citationCount: Optional[int] = Field(None, description="Number of citations")
@@ -88,6 +94,28 @@ class S2Paper(BaseModel):
     url: Optional[str] = Field(None, description="Semantic Scholar paper URL")
     venue: Optional[str] = Field(None, description="Venue display name")
     year: Optional[int] = Field(None, description="Publication year")
-    # Extra official S2 fields (for completeness, but not always returned)
     tldr: Optional[dict] = Field(None, description="Short summary")
 
+
+# ── UI types ──────────────────────────────────────────────────────────────────
+
+class Step(TypedDict):
+    id: str
+    label: str
+    status: str
+    description: str
+
+
+class StepName(Enum):
+    QUERY_CLARIFICATION = "Query clarification"
+    QUERY_OPTIMIZATION = "Query optimization"
+    PLAN = "Plan"
+    FIND_PAPERS = "Find papers"
+    RETRIEVE_AND_ANSWER_QUESTION = "Answer question"
+
+
+class StepStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"

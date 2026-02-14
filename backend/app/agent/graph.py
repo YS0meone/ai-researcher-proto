@@ -9,7 +9,6 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from langchain.chat_models import init_chat_model
 from langgraph.graph import START, END
-from app.agent.utils import setup_langsmith
 from pydantic import BaseModel, Field
 from langchain.messages import SystemMessage, AIMessage, ToolMessage, HumanMessage
 from app.tools.search import get_paper_details
@@ -19,14 +18,13 @@ from langgraph.graph.ui import push_ui_message
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing import Literal
 from app.agent.ui_manager import UIManager
-from app.agent.ui_types import StepName, StepStatus
+from app.core.schema import StepName, StepStatus
 from app.agent.utils import get_paper_abstract
 DO_NOT_RENDER_ID_PREFIX = "do-not-render-"
 
 
 setup_logging()
 
-setup_langsmith()
 logger = logging.getLogger(__name__)
 
 

@@ -1,6 +1,6 @@
 from semanticscholar import SemanticScholar
 from app.core.config import settings
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from typing import List, Union
 import time
 

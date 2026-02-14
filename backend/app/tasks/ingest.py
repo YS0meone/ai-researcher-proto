@@ -1,6 +1,6 @@
 import logging
 from app.celery_app import celery_app
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from app.core.config import settings
 from app.services.qdrant import QdrantService
 import arxiv

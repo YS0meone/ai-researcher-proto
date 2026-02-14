@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from app.tasks.ingest import ingest_paper_task
 from app.celery_app import celery_app
 

@@ -2,7 +2,7 @@ from typing import Literal, List
 from langchain_core.messages import AIMessage
 from langgraph.graph.ui import push_ui_message
 import uuid
-from app.agent.ui_types import Step, StepName, StepStatus
+from app.core.schema import Step, StepName, StepStatus
 from app.agent.states import SupervisorState
 
 step_update_map = {}

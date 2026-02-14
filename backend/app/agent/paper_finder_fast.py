@@ -4,16 +4,15 @@ from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import ToolNode
 from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details, forward_snowball, backward_snowball
 from app.core.config import settings
-from app.agent.utils import setup_langsmith
+from app.core.config import settings
 from rerankers import Reranker, Document
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from pydantic import BaseModel
 from typing import List, Annotated
 from langchain.agents import AgentState
 from langgraph.prebuilt import tools_condition
 
 
-setup_langsmith()
 MAX_PAPER_LIST_LENGTH = 20
 
 model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)

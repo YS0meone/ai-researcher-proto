@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 from pydantic import BaseModel
+import os
+from typing import Any
 
 class DatabaseConfig(BaseModel):
     url: str
@@ -95,6 +97,11 @@ class Settings(BaseSettings):
 
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+
+    def model_post_init(self, __context: Any) -> None:
+        os.environ["LANGCHAIN_TRACING_V2"] = str(self.LANGSMITH_TRACING_V2).lower()
+        os.environ["LANGCHAIN_API_KEY"] = self.LANGCHAIN_API_KEY
+        os.environ["LANGCHAIN_PROJECT"] = self.LANGCHAIN_PROJECT
 
     @property 
     def database_config(self) -> DatabaseConfig:

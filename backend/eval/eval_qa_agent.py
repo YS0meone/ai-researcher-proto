@@ -11,10 +11,9 @@ Evaluates the QA agent on the QASPER benchmark with proper metrics:
 from langsmith import evaluate
 from app.agent.qa import qa_graph
 from langchain.messages import HumanMessage
-from app.agent.utils import setup_langsmith
 import re
 import string
-from typing import List, Dict, Any
+from typing import List
 from collections import Counter
 from app.core.config import settings
 from langchain.chat_models import init_chat_model
@@ -22,7 +21,6 @@ from pydantic import BaseModel, Field
 from langsmith import Client
 from app.agent.qa_baseline import qa_baseline
 
-setup_langsmith()
 dataset_name = "qasper-qa-e2e"
 
 eval_model = init_chat_model(model=settings.EVAL_MODEL_NAME, api_key=settings.GEMINI_API_KEY)

@@ -1,15 +1,11 @@
 from langchain.tools import tool, ToolRuntime
-from langgraph.prebuilt import InjectedState
-from typing import List, Dict, Any, Optional, Annotated
-from app.db.models import Paper
-from app.db.session import AsyncSessionLocal
-from app.services.elasticsearch import ElasticsearchService
+from typing import List, Optional
 from app.services.qdrant import QdrantService
 from app.services.s2_client import S2Client
 from app.core.config import settings
 from pydantic import BaseModel, Field
 from langgraph.types import Command
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from langchain_tavily import TavilySearch
 from app.agent.utils import get_paper_info_text
 from langchain_core.documents import Document

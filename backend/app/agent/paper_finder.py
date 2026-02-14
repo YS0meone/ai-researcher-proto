@@ -5,16 +5,14 @@ from app.agent.states import PaperFinderState
 from langgraph.prebuilt import ToolNode
 from app.tools.search import s2_search_papers, tavily_research_overview, get_paper_details, forward_snowball, backward_snowball
 from app.core.config import settings
-from app.agent.utils import setup_langsmith, get_paper_info_text
+from app.agent.utils import get_paper_info_text
 from rerankers import Reranker, Document
-from app.db.schema import S2Paper
+from app.core.schema import S2Paper
 from pydantic import BaseModel, Field
 from typing import List, Tuple, Annotated, Union
 from langchain.agents import AgentState
 from langgraph.prebuilt import tools_condition
 
-
-setup_langsmith()
 
 ranker = Reranker("cohere", api_key=settings.COHERE_API_KEY)
 

@@ -16,7 +16,7 @@ from langchain.messages import SystemMessage, HumanMessage
 from typing import Literal
 from app.agent.utils import get_paper_abstract
 
-filter_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+filter_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 
 def remove_duplicated_evidence(existing_evds: List[Document], new_evds: List[Document]) -> List[Document]:

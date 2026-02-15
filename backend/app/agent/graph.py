@@ -28,6 +28,56 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _optimize_for_search(messages: list) -> str:
+    """Derive a keyword-style search query from the full conversation history."""
+    class SearchQueryOutput(BaseModel):
+        search_query: str = Field(
+            description=(
+                "A keyword-style query for semantic academic paper retrieval. "
+                "5-15 words. Include core concepts, method names, domain terms, "
+                "and any paper/author names mentioned in the conversation. "
+                "Do NOT write a full sentence — use noun phrases and keywords only. "
+                "Example: 'transformer self-attention mechanism NLP Vaswani 2017'"
+            )
+        )
+
+    system = SystemMessage(content=(
+        "You are an expert at generating academic paper search queries. "
+        "Given the conversation history below, produce a keyword-style search query "
+        "that captures what the user wants to find. "
+        "Resolve all references (e.g. 'that paper', 'it', 'their method') using context from earlier messages."
+    ))
+    model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+    structured = model.bind_tools([SearchQueryOutput], tool_choice="SearchQueryOutput")
+    msg = structured.invoke([system] + messages)
+    return msg.tool_calls[0]["args"]["search_query"]
+
+
+def _optimize_for_qa(messages: list) -> str:
+    """Derive a fully self-contained research question from the full conversation history."""
+    class QAQueryOutput(BaseModel):
+        qa_query: str = Field(
+            description=(
+                "A fully self-contained research question. "
+                "All pronouns and vague references must be replaced with explicit names "
+                "using context from earlier messages. "
+                "The question must make complete sense without any prior context."
+            )
+        )
+
+    system = SystemMessage(content=(
+        "You are an expert at reformulating research questions. "
+        "Given the conversation history below, rewrite the user's latest question "
+        "as a fully self-contained research question. "
+        "Resolve all references (e.g. 'that paper', 'it', 'their method', 'the above') "
+        "using context from earlier messages."
+    ))
+    model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+    structured = model.bind_tools([QAQueryOutput], tool_choice="QAQueryOutput")
+    msg = structured.invoke([system] + messages)
+    return msg.tool_calls[0]["args"]["qa_query"]
+
+
 @tool
 def find_papers(runtime: ToolRuntime) -> Command:
     """
@@ -35,14 +85,15 @@ def find_papers(runtime: ToolRuntime) -> Command:
     It would update the current papers list with the new papers found.
     Trust the result from the tools would find the most relevant papers.
     """
-    
-    user_query = runtime.state.get("optimized_query", "")
+
+    messages = runtime.state.get("messages", [])
     papers = runtime.state.get("papers", [])
 
-    logger.info(f"Finding papers for query: {user_query[:100]}{'...' if len(user_query) > 100 else ''}")
+    search_query = _optimize_for_search(messages)
+    logger.info(f"Finding papers for search query: {search_query[:100]}{'...' if len(search_query) > 100 else ''}")
     logger.debug(f"Current paper count: {len(papers)}")
 
-    state = {"optimized_query": user_query, "papers": papers, "messages": [HumanMessage(content=user_query)]}
+    state = {"optimized_query": search_query, "papers": papers, "messages": [HumanMessage(content=search_query)]}
     result = paper_finder_fast_graph.invoke(state)
     papers = result["papers"]
 
@@ -62,10 +113,11 @@ def retrieve_and_answer_question(runtime: ToolRuntime) -> str:
     Return:
     - The answer to the user's question
     """
-    user_query = runtime.state.get("optimized_query", "")
+    messages = runtime.state.get("messages", [])
     papers = runtime.state.get("papers", [])
     selected_ids = runtime.state.get("selected_paper_ids", [])
 
+    user_query = _optimize_for_qa(messages)
     logger.info(f"Answering question for query: {user_query[:100]}{'...' if len(user_query) > 100 else ''}")
     logger.debug(f"Selected paper count: {len(selected_ids)}, Total papers: {len(papers)}")
 
@@ -144,47 +196,9 @@ def query_clarification(state: SupervisorState):
             "ui_tracking_id": new_ui_tracking_id
         }
 
-def query_optimization(state: SupervisorState):
-    logger.debug("Query optimization node invoked")
-    ui_manager = UIManager.from_state(state)
-    new_steps = ui_manager.update_ui(StepName.QUERY_OPTIMIZATION, StepStatus.RUNNING)
-    system_prompt = f"""
-    You are an expert in optimizing user queries for a search agent for academic papers.
-    Your goals is to rephrase the user query to be more specific and to be more likely to help the subagent find the most relevant papers and answer the user's question.
-    There might be some clarification happened before this node, you should take that into account.
-    There are two types of queries:
-    
-    If the user's query is good enough, you may repeat the user's query as the optimized query or change it slightly to be more specific.
-    If the user's query is not good enough, you should optimize it.
-    The optimized query should be self-contained and should not require any additional context.
-    """
-
-    class QueryOptimizationOutput(BaseModel):
-
-        reasoning: str = Field(description="The reasoning for your optimization")
-        optimized_query: str = Field(description="The optimized query for the user's query")
-
-    tools = [QueryOptimizationOutput]
-    structured_model = supervisor_model.bind_tools(tools, tool_choice="QueryOptimizationOutput")
-    msg = structured_model.invoke([
-        SystemMessage(content=system_prompt)
-    ] + state["messages"])
-    response = msg.tool_calls[0]["args"]
-
-    logger.info(f"Query optimized: {response['optimized_query'][:100]}{'...' if len(response['optimized_query']) > 100 else ''}")
-    logger.debug(f"Optimization reasoning: {response['reasoning'][:150]}...")
-    new_steps = ui_manager.update_ui(StepName.QUERY_OPTIMIZATION, StepStatus.COMPLETED, response['optimized_query'])
-    message = f"The optimized query is: {response['optimized_query']}\n\nReasoning: {response['reasoning']}"
-
-    return {
-        "messages": [AIMessage(id=DO_NOT_RENDER_ID_PREFIX + str(uuid.uuid4()), content=message)], 
-        "optimized_query": response['optimized_query'],
-        "steps": new_steps
-    }
-
 def should_clarify(state: SupervisorState):
     is_clear = state.get("is_clear", True)
-    route = "optimize" if is_clear else "end"
+    route = "supervisor" if is_clear else "end"
     return route
 
 supervisor_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
@@ -383,13 +397,11 @@ supervisor_tool_node = ToolNode(tools)
 # Build the graph with decomposed supervisor
 graph = StateGraph(SupervisorState)
 graph.add_node("query_clarification", query_clarification)
-graph.add_node("query_optimization", query_optimization)
 graph.add_node("supervisor_agent", supervisor_agent_node)
 graph.add_node("supervisor_tools", supervisor_tool_node)
 
 graph.add_edge(START, "query_clarification")
-graph.add_conditional_edges("query_clarification", should_clarify, {"optimize": "query_optimization", "end": END})
-graph.add_edge("query_optimization", "supervisor_agent")
+graph.add_conditional_edges("query_clarification", should_clarify, {"supervisor": "supervisor_agent", "end": END})
 
 # Add conditional edges for the supervisor agent loop
 graph.add_conditional_edges(

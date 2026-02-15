@@ -8,7 +8,6 @@ from langchain_core.documents import Document
 from langgraph.graph.message import MessagesState
 
 class SupervisorState(AgentState):
-    optimized_query: Optional[str]
     is_clear: Optional[bool]
     papers: List[S2Paper]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]

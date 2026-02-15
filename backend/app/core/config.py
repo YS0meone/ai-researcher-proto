@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     GEMINI_API_KEY: str
 
+    OPENAI_MODEL_NAME: str
+    GEMINI_MODEL_NAME: str
+
     AGENT_MODEL_NAME: str
     QA_AGENT_MODEL_NAME: str
     EVAL_MODEL_NAME: str

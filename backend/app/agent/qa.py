@@ -1,4 +1,3 @@
-
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.prebuilt import ToolNode
@@ -22,7 +21,7 @@ from app.agent.prompts import (
 
 logger = logging.getLogger(__name__)
 
-qa_model = init_chat_model(model=settings.QA_AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+qa_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 
 def qa_retrieve(state: QAAgentState) -> QAAgentState:
@@ -124,7 +123,7 @@ def qa_answer(state: QAAgentState) -> QAAgentState:
     
     # Get all accumulated evidence
     evidences = state.get("evidences", [])
-    evidences_text = "\n".join([
+    evidences_text = "\n\n".join([
         f"Evidence {i}:\n{evidence.page_content}"
         for i, evidence in enumerate(evidences)
     ])

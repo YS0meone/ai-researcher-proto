@@ -5,6 +5,7 @@ import operator
 from langchain.agents import AgentState
 from app.core.schema import S2Paper, Step
 from langchain_core.documents import Document
+from app.agent.utils import merge_evidences
 from langgraph.graph.message import MessagesState
 
 class SupervisorState(AgentState):
@@ -28,7 +29,7 @@ class PaperFinderState(MessagesState):
     goal_achieved: bool
 
 class QAAgentState(MessagesState):
-    evidences: Annotated[List[Document], operator.add]
+    evidences: Annotated[List[Document], merge_evidences]
     limitation: str
     qa_iteration: int
     selected_paper_ids: List[str]

@@ -3,6 +3,8 @@ import os
 import time
 from typing import List, Dict
 from app.core.schema import S2Paper
+from langchain_core.documents import Document
+
 
 def timer(func):
     def wrapper(*args, **kwargs):
@@ -35,3 +37,19 @@ def get_paper_abstract(papers: List[S2Paper], selected_paper_ids: List[str]) -> 
         if paper.paperId in selected_paper_ids:
             abstracts[paper.paperId] = paper.abstract
     return abstracts
+
+
+def remove_duplicated_evidence(existing_evds: List[Document], new_evds: List[Document]) -> List[Document]:
+    exists_evds_ids = set()
+    non_duplicated_evds = []
+    for evd in existing_evds:
+        exists_evds_ids.add(evd.metadata.get("id") + "_" + evd.metadata.get("para"))
+    for evd in new_evds:
+        if evd.metadata.get("id") + "_" + evd.metadata.get("para") not in exists_evds_ids:
+            non_duplicated_evds.append(evd)
+    return non_duplicated_evds
+
+
+def merge_evidences(existing: List[Document], new: List[Document]) -> List[Document]:
+    """LangGraph reducer for evidences: merges and deduplicates by (id, para)."""
+    return existing + remove_duplicated_evidence(existing, new)

@@ -14,20 +14,11 @@ from pydantic import ConfigDict
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage
 from typing import Literal
-from app.agent.utils import get_paper_abstract
+from app.agent.utils import get_paper_abstract, remove_duplicated_evidence
 
 filter_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 
-def remove_duplicated_evidence(existing_evds: List[Document], new_evds: List[Document]) -> List[Document]:
-    exists_evds_ids = set()
-    non_duplicated_evds = []
-    for evd in existing_evds:
-        exists_evds_ids.add(evd.metadata.get("id") + "_" + evd.metadata.get("para"))
-    for evd in new_evds:
-        if evd.metadata.get("id") + "_" + evd.metadata.get("para") not in exists_evds_ids:
-            non_duplicated_evds.append(evd)
-    return non_duplicated_evds
 
 def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, batch_size: int = 3) -> List[int]:
 

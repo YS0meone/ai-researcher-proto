@@ -112,6 +112,7 @@ class StepName(Enum):
     PLAN = "Plan"
     FIND_PAPERS = "Find papers"
     RETRIEVE_AND_ANSWER_QUESTION = "Answer question"
+    REPLANNING = "Replanning"
 
 
 class StepStatus(Enum):

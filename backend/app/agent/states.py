@@ -11,7 +11,7 @@ class SupervisorState(AgentState):
     is_clear: Optional[bool]
     papers: List[S2Paper]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
-    plan_steps: List[Literal["answer_question", "find_papers", "end"]]
+    plan_steps: List[Literal["find_papers", "retrieve_and_answer_question"]]
     selected_paper_ids: List[str]
     ui_tracking_message: AIMessage
     ui_tracking_id: str

@@ -166,35 +166,59 @@ export function Thread() {
     prevMessageLength.current = messages.length;
   }, [messages]);
 
+  const isInterrupted = !!stream.interrupt;
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    // When interrupted, allow empty input (just resuming with selection).
+    // When not interrupted, require non-empty input.
+    if ((!input.trim() && !isInterrupted) || isLoading) return;
     setFirstTokenReceived(false);
 
-    const newHumanMessage: Message = {
-      id: uuidv4(),
-      type: "human",
-      content: input,
-    };
-
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
-    stream.submit(
-      {
-        messages: [...toolMessages, newHumanMessage],
-        selected_paper_ids: selectedPaperIds,
-      },
-      {
-        streamMode: ["values"],
-        optimisticValues: (prev) => ({
-          ...prev,
-          messages: [
-            ...(prev.messages ?? []),
-            ...toolMessages,
-            newHumanMessage,
-          ],
-        }),
-      },
-    );
+
+    if (isInterrupted) {
+      // LangGraph server treats `input` and `command` as mutually exclusive —
+      // state updates in the first argument are silently ignored when a command
+      // is present.  Embed selected_paper_ids and the user message inside the
+      // resume value so the replanner can read them from interrupt()'s return.
+      stream.submit(
+        {},
+        {
+          command: {
+            resume: {
+              selected_paper_ids: selectedPaperIds,
+              user_message: input.trim() || null,
+            },
+          },
+          streamMode: ["values"],
+        },
+      );
+    } else {
+      const newHumanMessage: Message = {
+        id: uuidv4(),
+        type: "human",
+        content: input,
+      };
+
+      stream.submit(
+        {
+          messages: [...toolMessages, newHumanMessage],
+          selected_paper_ids: selectedPaperIds,
+        },
+        {
+          streamMode: ["values"],
+          optimisticValues: (prev) => ({
+            ...prev,
+            messages: [
+              ...(prev.messages ?? []),
+              ...toolMessages,
+              newHumanMessage,
+            ],
+          }),
+        },
+      );
+    }
 
     setInput("");
   };
@@ -411,7 +435,11 @@ export function Thread() {
                           form?.requestSubmit();
                         }
                       }}
-                      placeholder="Type your message..."
+                      placeholder={
+                        isInterrupted
+                          ? "Type a follow-up, or click Continue to proceed..."
+                          : "Type your message..."
+                      }
                       className="p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none"
                     />
 
@@ -440,9 +468,9 @@ export function Thread() {
                         <Button
                           type="submit"
                           className="transition-all shadow-md"
-                          disabled={isLoading || !input.trim()}
+                          disabled={isLoading || (!input.trim() && !isInterrupted)}
                         >
-                          Send
+                          {isInterrupted ? "Continue" : "Send"}
                         </Button>
                       )}
                     </div>

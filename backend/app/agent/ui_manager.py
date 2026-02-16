@@ -71,6 +71,16 @@ def get_update_find_papers_step(step_name: StepName, step_status: StepStatus, nu
         raise ValueError(f"Invalid step status: {step_status}")
     return template_step
 
+def get_update_replanning_step(step_name: StepName, step_status: StepStatus, *args: tuple[str, ...]):
+    template_step = get_template_step(step_name, step_status)
+    if step_status == StepStatus.RUNNING:
+        template_step["description"] = "Re-evaluating plan based on new context..."
+    elif step_status == StepStatus.COMPLETED:
+        template_step["description"] = "Plan updated."
+    else:
+        raise ValueError(f"Invalid step status: {step_status}")
+    return template_step
+
 def get_update_retrieve_and_answer_question_step(step_name: StepName, step_status: StepStatus, *args: tuple[str, ...]):
     template_step = get_template_step(step_name, step_status)
     if step_status == StepStatus.RUNNING:
@@ -92,6 +102,8 @@ def get_update_step(step_name: StepName, step_status: StepStatus, *args: tuple[s
         return get_update_find_papers_step(step_name, step_status, *args)
     elif step_name == StepName.RETRIEVE_AND_ANSWER_QUESTION:
         return get_update_retrieve_and_answer_question_step(step_name, step_status, *args)
+    elif step_name == StepName.REPLANNING:
+        return get_update_replanning_step(step_name, step_status, *args)
     else:
         raise ValueError(f"Invalid step name: {step_name}")
 

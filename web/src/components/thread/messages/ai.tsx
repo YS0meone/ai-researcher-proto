@@ -13,6 +13,7 @@ import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
+import { SelectPapersInterruptView } from "./select-papers-interrupt";
 import { PaperComponent, PaperListComponent, StepTracker } from "@/components/agent/ui";
 
 function CustomComponent({
@@ -150,7 +151,11 @@ export function AssistantMessage({
           {threadInterrupt?.value &&
           !isAgentInboxInterruptSchema(threadInterrupt.value) &&
           isLastMessage ? (
-            <GenericInterruptView interrupt={threadInterrupt.value} />
+            threadInterrupt.value === "select_papers" ? (
+              <SelectPapersInterruptView />
+            ) : (
+              <GenericInterruptView interrupt={threadInterrupt.value} />
+            )
           ) : null}
           <div
             className={cn(

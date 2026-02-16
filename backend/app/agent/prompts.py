@@ -48,6 +48,8 @@ Paper abstracts:
 {abstracts_text}
 Retrieved evidences:
 {evidences_text}
+Limitation from previous retrieval attempt:
+{limitation}
 """
 
 QA_ANSWER_SYSTEM = """You are an expert research assistant that helps answer user questions.

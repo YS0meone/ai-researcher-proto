@@ -10,7 +10,8 @@
       "mcp__docs-mcp-server__search_docs",
       "mcp__docs-mcp-server__scrape_docs",
       "mcp__docs-mcp-server__get_job_info",
-      "mcp__docs-mcp-server__fetch_url"
+      "mcp__docs-mcp-server__fetch_url",
+      "Bash(git stash pop:*)"
     ]
   }
 }

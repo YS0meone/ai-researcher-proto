@@ -99,12 +99,13 @@ def test_qa_graph_end_to_end(capsys):
 
             print(f"\n{'='*60}")
             print(f"NODE: {node_name}")
-            print(f"  evidences count : {len(node_output.get('evidences', []))}")
-            print(f"  sufficient      : {node_output.get('sufficient_evidence')}")
-            print(f"  qa_iteration    : {node_output.get('qa_iteration')}")
-            print(f"  limitation      : {node_output.get('limitation', '')[:80]}")
-            if node_output.get("final_answer"):
-                print(f"  final_answer    :\n{node_output['final_answer']}")
+            if isinstance(node_output, dict):
+                print(f"  evidences count : {len(node_output.get('evidences', []))}")
+                print(f"  sufficient      : {node_output.get('sufficient_evidence')}")
+                print(f"  qa_iteration    : {node_output.get('qa_iteration')}")
+                print(f"  limitation      : {node_output.get('limitation', '')[:80]}")
+                if node_output.get("final_answer"):
+                    print(f"  final_answer    :\n{node_output['final_answer']}")
 
     node_names = [name for name, _ in steps]
     final_state = steps[-1][1]

@@ -6,7 +6,6 @@ from app.core.config import settings
 from app.tools.search import retrieve_evidence_from_selected_papers
 from app.agent.utils import get_paper_abstract
 import logging
-import sys
 from typing import Union
 from app.agent.states import QAAgentState
 from langgraph.graph import StateGraph, END, START
@@ -29,7 +28,7 @@ def qa_retrieve(state: QAAgentState) -> QAAgentState:
     selected_paper_ids = state.get("selected_paper_ids", [])
     papers = state.get("papers", [])
     if not selected_paper_ids:
-        print("WARNING: No papers selected for QA!", file=sys.stderr)
+        logger.warning("No papers selected for QA!")
         return {
             "evidences": [],
             "messages": [AIMessage(content="No papers have been selected for Q&A. Please select papers first or use the paper finding mode.")]
@@ -73,7 +72,8 @@ def qa_evaluate(state: QAAgentState) -> QAAgentState:
         for i, evidence in enumerate(evidences)
     ]) if evidences else "No evidence retrieved yet."
 
-    evaluation_prompt = QA_EVALUATION_USER.format(user_query=user_query, abstracts_text=abstracts_text, evidences_text=evidences_text)
+    limitation = state.get("limitation", "This is the first retrieval attempt.")
+    evaluation_prompt = QA_EVALUATION_USER.format(user_query=user_query, abstracts_text=abstracts_text, evidences_text=evidences_text, limitation=limitation)
 
     class AskForMoreEvidence(BaseModel):
         limitation: str = Field(
@@ -92,6 +92,14 @@ def qa_evaluate(state: QAAgentState) -> QAAgentState:
         SystemMessage(content=QA_EVALUATION_SYSTEM),
         HumanMessage(content=evaluation_prompt)
     ])
+
+    if decision_response is None or decision_response.decision is None:
+        return {
+            "messages": [AIMessage(content="Evaluation failed, proceeding to answer.")],
+            "limitation": "Structured output parsing failed.",
+            "sufficient_evidence": False,
+            "qa_iteration": state.get("qa_iteration", 0) + 1
+        }
 
     if isinstance(decision_response.decision, AskForMoreEvidence):
         return {
@@ -125,7 +133,7 @@ def qa_answer(state: QAAgentState) -> QAAgentState:
     evidences = state.get("evidences", [])
     evidences_text = "\n\n".join([
         f"Evidence {i}:\n{evidence.page_content}"
-        for i, evidence in enumerate(evidences)
+        for i, evidence in enumerate(evidences, 1)
     ])
     
     limitation = state.get("limitation", "No limitation")
@@ -137,8 +145,13 @@ def qa_answer(state: QAAgentState) -> QAAgentState:
         for paper_id, abstract in abstracts.items()
     ])
     answer_prompt = QA_ANSWER_USER.format(user_query=user_query, abstracts_text=abstracts_text, evidences_text=evidences_text, limitation=limitation)
+    forced = state.get("qa_iteration", 0) >= 3 and not state.get("sufficient_evidence", False)
+    if forced:
+        answer_prompt += "\n\nNote: Maximum retrieval iterations reached. Evidence may be incomplete — acknowledge any gaps explicitly."
+    recent_messages = state.get("messages", [])[-6:]
     response = qa_model.invoke([
         SystemMessage(content=QA_ANSWER_SYSTEM),
+        *recent_messages,
         HumanMessage(content=answer_prompt)
     ])
     

@@ -54,7 +54,7 @@ def qa_agent_wrapper(dataset_input: dict) -> dict:
         
     # Extract retrieved segments for evidence recall
     # Note: retrieved_segments is now a List[str] (raw tool outputs), not List[Dict]
-    retrieved_segments = [document.content for document in result_state.get("evidences", [])]
+    retrieved_segments = [document.page_content for document in result_state.get("evidences", [])]
     
     return {
         "answer": answer,

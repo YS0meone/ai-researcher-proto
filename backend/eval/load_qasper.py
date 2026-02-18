@@ -8,6 +8,7 @@ from app.services.qdrant import QdrantService
 from app.core.config import settings
 from numpy.typing import NDArray
 from langsmith import Client
+from concurrent.futures import ThreadPoolExecutor, as_completed
 client = Client()
 
 dataset_name = "qasper-qa-e2e"
@@ -57,12 +58,34 @@ def convert_to_ArxivPaper(d: QasperPaper) -> ArxivPaper:
         abstract=d["abstract"]
     )
 
-def load_qasper_to_db(papers_df: pd.DataFrame) -> ArxivPaper:
-    for _, row in tqdm(papers_df.iterrows(), total=len(papers_df)):
-        d = row.to_dict()
-        paper = convert_to_ArxivPaper(d)
-        flattened_paragraphs = [para for section in d["full_text"]["paragraphs"] for para in section] + [cap for cap in d["figures_and_tables"]["caption"]]
-        qdrant_service.add_paper_with_chunks(paper, flattened_paragraphs)
+def _process_paper(row: pd.Series) -> str:
+    d = row.to_dict()
+    paper = convert_to_ArxivPaper(d)
+    chunks = []
+    para_indices = []
+    idx = 0
+    for section in d["full_text"]["paragraphs"]:
+        for para in section:
+            chunks.append(para)
+            para_indices.append(idx)
+            idx += 1
+    for cap in d["figures_and_tables"]["caption"]:
+        chunks.append(cap)
+        para_indices.append(idx)
+        idx += 1
+    qdrant_service.add_paper_with_chunks(paper, chunks, para_indices)
+    return paper.id
+
+def load_qasper_to_db(papers_df: pd.DataFrame, max_workers: int = 1) -> None:
+    rows = [row for _, row in papers_df.iterrows()]
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_process_paper, row): row["id"] for row in rows}
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            paper_id = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Failed to load paper {paper_id}: {e}")
 
 def create_examples(dataset_id: str, paper_id: str, raw_data: QasperPaper) -> bool:
     questions = raw_data["qas"]["question"]

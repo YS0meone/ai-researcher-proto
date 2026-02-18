@@ -115,10 +115,16 @@ class QdrantService:
         self.vector_store.add_documents(docs)
         logging.info(f"Added paper {paper.id} to Qdrant")
     
-    def add_paper_with_chunks(self, paper: ArxivPaper, chunks: list[str]):
+    def add_paper_with_chunks(self, paper: ArxivPaper, chunks: list[str], para_indices: list[int] | None = None):
         print(paper.model_dump())
-        docs = [Document(page_content=chunk, metadata=paper.model_dump()) for chunk in chunks]
-        self.vector_store.add_documents(docs)
+        base_metadata = paper.model_dump()
+        if para_indices is None:
+            para_indices = list(range(len(chunks)))
+        docs = [
+            Document(page_content=chunk, metadata={**base_metadata, "para": para_idx})
+            for chunk, para_idx in zip(chunks, para_indices)
+        ]
+        self.retriever.add_documents(docs)
         logging.info(f"Added {len(docs)} chunks to Qdrant")
 
     

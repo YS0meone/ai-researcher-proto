@@ -80,3 +80,45 @@ Retrieved evidences:
 {evidences_text}
 
 Based on the above evidence and analysis, provide a concise and clear answer to the user's question. If the evidence is insufficient, acknowledge the limitations."""
+
+LLM_AS_JUDGE_PROMPT="""You are an expert AI evaluator assessing the performance of AIRA, an AI research assistant. 
+
+Evaluate AIRA's generated answer based on the provided Question, Ground Truth, and Retrieved Evidence.
+
+IMPORTANT CONTEXT:
+The Ground Truth Answer is highly extractive (designed for Token F1 scoring) and is NOT user-friendly. Do not penalize AIRA for providing a comprehensive, readable answer. A high-quality AIRA answer should be superior in synthesis to the Ground Truth while remaining strictly factually aligned with it.
+
+### INPUT DATA ###
+<Question>
+{question}
+</Question>
+
+<Ground_Truth_Evidence>
+{ground_truth_evidence}
+</Ground_Truth_Evidence>
+
+<Ground_Truth_Answer>
+{ground_truth_answer}
+</Ground_Truth_Answer>
+
+<AIRA_Retrieved_Evidence>
+{retrieved_evidence}
+</AIRA_Retrieved_Evidence>
+
+<AIRA_Generated_Answer>
+{generated_answer}
+</AIRA_Generated_Answer>
+
+### EVALUATION CRITERIA (1-5 Scale) ###
+1. Factual Accuracy & Alignment: Does AIRA's answer capture the core semantic meaning and facts of the Ground Truth Answer without hallucinating?
+2. Synthesis & User-Friendliness: How well did AIRA translate the raw information into a clear, readable response? 
+3. Comprehensiveness: Does AIRA's answer fully address the question using the available evidence?
+
+### OUTPUT FORMAT ###
+Output ONLY a valid JSON object with the following structure. Do not include markdown formatting or any other text.
+{{
+  "accuracy_score": <int>,
+  "synthesis_score": <int>,
+  "comprehensiveness_score": <int>,
+  "overall_score": <float>
+}}"""

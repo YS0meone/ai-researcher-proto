@@ -43,9 +43,9 @@ def remove_duplicated_evidence(existing_evds: List[Document], new_evds: List[Doc
     exists_evds_ids = set()
     non_duplicated_evds = []
     for evd in existing_evds:
-        exists_evds_ids.add(evd.metadata.get("id") + "_" + evd.metadata.get("para"))
+        exists_evds_ids.add(str(evd.metadata.get("id", "")) + "_" + str(evd.metadata.get("para", "")))
     for evd in new_evds:
-        if evd.metadata.get("id") + "_" + evd.metadata.get("para") not in exists_evds_ids:
+        if str(evd.metadata.get("id", "")) + "_" + str(evd.metadata.get("para", "")) not in exists_evds_ids:
             non_duplicated_evds.append(evd)
     return non_duplicated_evds
 

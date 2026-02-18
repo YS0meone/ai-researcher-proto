@@ -148,10 +148,8 @@ def qa_answer(state: QAAgentState) -> QAAgentState:
     forced = state.get("qa_iteration", 0) >= 3 and not state.get("sufficient_evidence", False)
     if forced:
         answer_prompt += "\n\nNote: Maximum retrieval iterations reached. Evidence may be incomplete — acknowledge any gaps explicitly."
-    recent_messages = state.get("messages", [])[-6:]
     response = qa_model.invoke([
         SystemMessage(content=QA_ANSWER_SYSTEM),
-        *recent_messages,
         HumanMessage(content=answer_prompt)
     ])
     

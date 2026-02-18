@@ -1,0 +1,1 @@
+uv run python -m eval.eval_qa_agent --agent qa --split test

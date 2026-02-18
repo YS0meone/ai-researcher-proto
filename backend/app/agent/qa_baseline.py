@@ -11,7 +11,7 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel
 from pydantic import Field
 
-qa_baseline_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.OPENAI_API_KEY)
+qa_baseline_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 train_df = pd.read_parquet(Path(__file__).parent.parent.parent / "eval" / "data" / "train.parquet")
 test_df = pd.read_parquet(Path(__file__).parent.parent.parent / "eval" / "data" / "test.parquet")

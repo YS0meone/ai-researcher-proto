@@ -1,3 +1,4 @@
+import asyncio
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage
 from langgraph.graph import START, END, StateGraph
@@ -51,26 +52,26 @@ class SearchAgentState(AgentState):
 
 
 
-def search_agent_node(state: SearchAgentState):
+async def search_agent_node(state: SearchAgentState):
     search_query_prompt = """
     You are a senior research assistant who helps finding academic papers based on a user query.
 
     Your goal is to utilize the provided tools to help user find the most relevant papers to the user query.
-    
+
     You have access to multiple search methods:
-    1. General web search (tavily_research_overview): Use this when the research topic is general or unfamiliar. 
+    1. General web search (tavily_research_overview): Use this when the research topic is general or unfamiliar.
        This helps you understand the research landscape and identify famous/seminal papers you shouldn't miss.
-    
+
     2. Academic database search (s2_search_papers): Search Semantic Scholar's database of 200M+ papers.
        Use keyword queries, filters by year, venue, citation count, etc. to find relevant papers.
-    
+
     3. Citation chasing tools:
        - forward_snowball: Find papers that your seed papers CITE (their references/foundations)
        - backward_snowball: Find papers that CITE your seed papers (recent work building on them)
        Use these when you've found good papers and want to explore their citation network.
-    
+
     4. Paper details (get_paper_details): Check what papers are currently in your paper list.
-    
+
     Strategy tips:
     - If the user query is about a specific paper, use the academic database search with the title/author filters to find the paper and quickly finish the task.
     - If the user query is more general, you should follow the following strategy:
@@ -78,12 +79,12 @@ def search_agent_node(state: SearchAgentState):
         - Use academic database for targeted searches with filters
         - Use citation chasing to expand from good seed papers you've found
         - Check paper details to avoid redundant searches
-    
+
     Reflect on past actions and completed steps to decide what to do next.
     If you have sufficient results, stop and provide a concise summary of what you found.
     """
 
-    response = search_agent_model.invoke([
+    response = await search_agent_model.ainvoke([
         SystemMessage(content=search_query_prompt),
         *state.get("messages", [])
     ])
@@ -91,19 +92,19 @@ def search_agent_node(state: SearchAgentState):
 
 search_tool_node = ToolNode(tools)
 
-def rerank_node(state: SearchAgentState):
+async def rerank_node(state: SearchAgentState):
     if len(state.get("new_papers", [])) == 0:
         return {}
-    
+
     existing_papers = state.get("papers", [])
-    
+
     all_papers = list(existing_papers) + list(state.get("new_papers", []))
     unique_papers = {p.paperId: p for p in all_papers}
     deduped_list = list(unique_papers.values())
-    
+
     if len(deduped_list) > 0:
         user_query = state.get("optimized_query", "")
-        
+
         # Skip reranking if no query or no ranker
         if not user_query or not user_query.strip():
             print("⚠️  Skipping rerank: no query provided")
@@ -125,19 +126,18 @@ def rerank_node(state: SearchAgentState):
                         doc_id=str(paper.paperId),
                         metadata=paper.model_dump()
                     ))
-                
+
                 print(f"🔄 Reranking {len(docs)} papers with query: {user_query[:50]}...")
-                
-                # Debug: Try to catch the actual API response
+
                 try:
-                    reranked_results = ranker.rank(query=user_query, docs=docs)
+                    reranked_results = await asyncio.to_thread(ranker.rank, query=user_query, docs=docs)
                     top_matches = reranked_results.top_k(k=MAX_PAPER_LIST_LENGTH)
                 except KeyError as ke:
                     print(f"🔍 KeyError in reranking: {ke}")
                     print(f"🔍 This suggests Cohere API returned an error response")
                     print(f"🔍 Check your COHERE_API_KEY environment variable")
                     raise  # Re-raise to go to outer except block
-                
+
                 final_papers = []
                 for match in top_matches:
                     paper_obj = S2Paper.model_validate(match.document.metadata)
@@ -149,7 +149,7 @@ def rerank_node(state: SearchAgentState):
                 final_papers = deduped_list[:MAX_PAPER_LIST_LENGTH]
     else:
         final_papers = []
-    
+
     return {"papers": final_papers, "new_papers": ClearItem(), "iter": state.get("iter", 0) + 1}
 
 def my_tools_condition(state: SearchAgentState):

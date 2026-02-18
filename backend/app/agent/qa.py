@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 qa_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
 
 
-def qa_retrieve(state: QAAgentState) -> QAAgentState:
+async def qa_retrieve(state: QAAgentState) -> QAAgentState:
     user_query = state.get("user_query", "")
     selected_paper_ids = state.get("selected_paper_ids", [])
     papers = state.get("papers", [])
@@ -46,11 +46,11 @@ def qa_retrieve(state: QAAgentState) -> QAAgentState:
         f"Paper {paper_id}:\n{abstract}"
         for paper_id, abstract in abstracts.items()
     ])
-    
+
     retrieval_prompt = QA_RETRIEVAL_USER.format(user_query=user_query, abstracts_text=abstracts_text, evidences_text=evidences_text, limitation=limitation)
 
     tool_model = qa_model.bind_tools([retrieve_evidence_from_selected_papers], tool_choice="retrieve_evidence_from_selected_papers")
-    tool_response = tool_model.invoke([
+    tool_response = await tool_model.ainvoke([
         SystemMessage(content=QA_RETRIEVAL_SYSTEM),
         *state.get("messages", []),
         HumanMessage(content=retrieval_prompt)
@@ -59,7 +59,7 @@ def qa_retrieve(state: QAAgentState) -> QAAgentState:
         "messages": [tool_response],
     }
 
-def qa_evaluate(state: QAAgentState) -> QAAgentState:
+async def qa_evaluate(state: QAAgentState) -> QAAgentState:
     user_query = state.get("user_query", "")
     abstracts = get_paper_abstract(state.get("papers", []), state.get("selected_paper_ids", []))
     abstracts_text = "\n".join([
@@ -78,7 +78,7 @@ def qa_evaluate(state: QAAgentState) -> QAAgentState:
     class AskForMoreEvidence(BaseModel):
         limitation: str = Field(
             description="The limitation of the current retrieved evidence to help with the next retrieval attempt")
-    
+
     class AnswerQuestion(BaseModel):
         reasoning: str = Field(
             description="The reasoning for why we should answer the user's question based on the retrieved evidence")
@@ -88,7 +88,7 @@ def qa_evaluate(state: QAAgentState) -> QAAgentState:
             description="The decision for whether to retrieve more evidence or to answer the user's question")
 
     structured_model = qa_model.with_structured_output(Evaluation)
-    decision_response = structured_model.invoke([
+    decision_response = await structured_model.ainvoke([
         SystemMessage(content=QA_EVALUATION_SYSTEM),
         HumanMessage(content=evaluation_prompt)
     ])
@@ -122,7 +122,7 @@ def qa_evaluate(state: QAAgentState) -> QAAgentState:
             "qa_iteration": state.get("qa_iteration", 0) + 1
         }
 
-def qa_answer(state: QAAgentState) -> QAAgentState:
+async def qa_answer(state: QAAgentState) -> QAAgentState:
     """
     Generate a final answer based on retrieved segments and reasoning.
     Combines all evidence and provides a concise yet complete response.
@@ -148,7 +148,7 @@ def qa_answer(state: QAAgentState) -> QAAgentState:
     forced = state.get("qa_iteration", 0) >= 3 and not state.get("sufficient_evidence", False)
     if forced:
         answer_prompt += "\n\nNote: Maximum retrieval iterations reached. Evidence may be incomplete — acknowledge any gaps explicitly."
-    response = qa_model.invoke([
+    response = await qa_model.ainvoke([
         SystemMessage(content=QA_ANSWER_SYSTEM),
         HumanMessage(content=answer_prompt)
     ])

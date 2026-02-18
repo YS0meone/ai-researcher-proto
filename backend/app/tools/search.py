@@ -1,3 +1,4 @@
+import asyncio
 from langchain.tools import tool, ToolRuntime
 from typing import List, Optional
 from app.services.qdrant import QdrantService
@@ -20,7 +21,7 @@ filter_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=setting
 
 
 
-def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, batch_size: int = 3) -> List[int]:
+async def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, batch_size: int = 3) -> List[int]:
 
     llm_document_filter_system = """
     You are an expert in document filtering for academic paper QA.
@@ -30,9 +31,9 @@ def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, 
     If the document is not relevant to answer the user question or not helpful to understand the user question, you should filter it
     You should output a list of index of the documents to keep.
     """
-    
+
     results = []
-    for i in range(0,len(evds),batch_size):
+    for i in range(0, len(evds), batch_size):
         batch_evds = evds[i:i+batch_size]
         batch_evidence_text = "\n".join([f"Documents {i}:\n{evd.page_content}" for i, evd in enumerate(batch_evds)])
         llm_document_filter_prompt = f"""
@@ -42,9 +43,9 @@ def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, 
         """
         class DocumentFilterResult(BaseModel):
             decisions: List[Literal["0", "1", "2"]] = Field(description="The index of the documents to keep")
-        
+
         structured_model = filter_model.with_structured_output(DocumentFilterResult)
-        llm_document_filter_response = structured_model.invoke([
+        llm_document_filter_response = await structured_model.ainvoke([
             SystemMessage(content=llm_document_filter_system),
             HumanMessage(content=llm_document_filter_prompt)
         ])
@@ -54,7 +55,7 @@ def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, 
 
 
 @tool
-def retrieve_evidence_from_selected_papers(
+async def retrieve_evidence_from_selected_papers(
     runtime: ToolRuntime,
     reasoning: str,
     query: str,
@@ -86,15 +87,16 @@ def retrieve_evidence_from_selected_papers(
     try:
         # Initialize Qdrant service
         qdrant_service = QdrantService(settings.qdrant_config)
-        # Perform vector search
-        results = qdrant_service.search_selected_ids(
+        # Perform vector search (sync client — offload to thread)
+        results = await asyncio.to_thread(
+            qdrant_service.search_selected_ids,
             ids=ids,
             query=query,
             k=min(limit, 30),
             score_threshold=score_threshold,
         )
         results = remove_duplicated_evidence(existing_evds, results)
-        index_to_keep = llm_document_filter_batch(results, query, abstracts, batch_size=3)
+        index_to_keep = await llm_document_filter_batch(results, query, abstracts, batch_size=3)
         results = [results[i] for i in index_to_keep if 0 <= i < len(results)]
     except Exception as e:
         return Command(

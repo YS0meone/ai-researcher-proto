@@ -34,7 +34,7 @@ class QdrantService:
 
     def __init__(self, config: QdrantConfig):
         self.config = config
-        self.client = QdrantClient(url=self.config.url)
+        self.client = QdrantClient(url=self.config.url, timeout=60)
 
         self.child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
@@ -315,7 +315,7 @@ class QdrantService:
                     )
                 ]
             ),
-            exact=True,
+            exact=False,
         )
         logger.info(f"check_paper_exists({paper_id!r}): count={result.count}")
         return result.count > 0

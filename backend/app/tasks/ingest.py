@@ -3,6 +3,7 @@ from app.celery_app import celery_app
 from app.core.schema import S2Paper
 from app.core.config import settings
 from app.services.qdrant import QdrantService
+from qdrant_client.http.exceptions import ResponseHandlingException
 import arxiv
 import re
 from pathlib import Path
@@ -19,7 +20,15 @@ def _get_qdrant_service() -> QdrantService:
     return _qdrant_service
 
 
-@celery_app.task(bind=True, name="ingest_paper", max_retries=2)
+@celery_app.task(
+    bind=True,
+    name="ingest_paper",
+    max_retries=3,
+    autoretry_for=(ResponseHandlingException,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+)
 def ingest_paper_task(self, paper_dict: dict) -> dict:
     """Celery task that ingests a single S2Paper into Qdrant.
 

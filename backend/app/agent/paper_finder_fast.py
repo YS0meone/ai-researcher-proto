@@ -16,7 +16,7 @@ from langgraph.prebuilt import tools_condition
 
 MAX_PAPER_LIST_LENGTH = 20
 
-model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+model = init_chat_model(model=settings.PF_AGENT_MODEL_NAME)
 
 tools = [tavily_research_overview, s2_search_papers, get_paper_details, forward_snowball, backward_snowball]
 search_agent_model = model.bind_tools(tools)

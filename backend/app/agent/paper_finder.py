@@ -22,7 +22,7 @@ tool_node = ToolNode(tools)
 MAX_ITER = 3
 MAX_PAPER_LIST_LENGTH = 20
 
-model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+model = init_chat_model(model=settings.PF_AGENT_MODEL_NAME)
 search_agent_model = model.bind_tools(tools)
 
 def planner(state: PaperFinderState):

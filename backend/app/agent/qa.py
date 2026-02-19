@@ -20,7 +20,8 @@ from app.agent.prompts import (
 
 logger = logging.getLogger(__name__)
 
-qa_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+qa_model = init_chat_model(model=settings.QA_AGENT_MODEL_NAME)
+qa_eval_model = init_chat_model(model=settings.QA_EVALUATION_MODEL_NAME)
 
 
 async def qa_retrieve(state: QAAgentState) -> QAAgentState:
@@ -87,7 +88,7 @@ async def qa_evaluate(state: QAAgentState) -> QAAgentState:
         decision: Union[AskForMoreEvidence, AnswerQuestion] = Field(
             description="The decision for whether to retrieve more evidence or to answer the user's question")
 
-    structured_model = qa_model.with_structured_output(Evaluation)
+    structured_model = qa_eval_model.with_structured_output(Evaluation)
     decision_response = await structured_model.ainvoke([
         SystemMessage(content=QA_EVALUATION_SYSTEM),
         HumanMessage(content=evaluation_prompt)

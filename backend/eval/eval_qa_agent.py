@@ -25,7 +25,7 @@ from app.core.schema import S2Paper
 
 dataset_name = "qasper-qa-e2e"
 
-eval_model = init_chat_model(model=settings.EVAL_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+eval_model = init_chat_model(model=settings.QA_EVALUATOR_MODEL_NAME)
 
 
 def qa_agent_wrapper(dataset_input: dict) -> dict:

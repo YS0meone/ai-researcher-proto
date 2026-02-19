@@ -17,9 +17,7 @@ from langchain.messages import SystemMessage, HumanMessage
 from typing import Literal
 from app.agent.utils import get_paper_abstract, remove_duplicated_evidence
 
-filter_model = init_chat_model(model=settings.GEMINI_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
-
-
+filter_model = init_chat_model(model=settings.PF_FILTER_MODEL_NAME)
 
 async def llm_document_filter_batch(evds: List[Document], query: str, abstracts: str, batch_size: int = 3) -> List[int]:
 

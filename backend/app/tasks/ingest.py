@@ -81,8 +81,8 @@ def ingest_paper_task(self, paper_dict: dict) -> dict:
     if has_pdf:
         try:
             file_name = re.sub(r'[<>:"/\\|?*]', '_', arxiv_paper.title.replace(" ", "_"))
-            Path(settings.LOADER_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-            arxiv_paper.download_pdf(dirpath=settings.LOADER_OUTPUT_DIR, filename=file_name+".pdf")
+            Path(settings.PDF_DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
+            arxiv_paper.download_pdf(dirpath=settings.PDF_DOWNLOAD_DIR, filename=file_name+".pdf")
 
             chunk_count = qdrant.add_s2_paper(file_name, paper.paperId)
             logger.info(f"Ingested paper {paper.paperId} via PDF ({chunk_count} chunks)")

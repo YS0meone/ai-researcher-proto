@@ -47,8 +47,7 @@ async def _optimize_for_search(messages: list) -> str:
         "that captures what the user wants to find. "
         "Resolve all references (e.g. 'that paper', 'it', 'their method') using context from earlier messages."
     ))
-    model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
-    structured = model.bind_tools([SearchQueryOutput], tool_choice="SearchQueryOutput")
+    structured = supervisor_model.bind_tools([SearchQueryOutput], tool_choice="SearchQueryOutput")
     msg = await structured.ainvoke([system] + messages)
     return msg.tool_calls[0]["args"]["search_query"]
 
@@ -72,8 +71,7 @@ async def _optimize_for_qa(messages: list) -> str:
         "Resolve all references (e.g. 'that paper', 'it', 'their method', 'the above') "
         "using context from earlier messages."
     ))
-    model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
-    structured = model.bind_tools([QAQueryOutput], tool_choice="QAQueryOutput")
+    structured = supervisor_model.bind_tools([QAQueryOutput], tool_choice="QAQueryOutput")
     msg = await structured.ainvoke([system] + messages)
     return msg.tool_calls[0]["args"]["qa_query"]
 
@@ -137,7 +135,7 @@ async def retrieve_and_answer_question(runtime: ToolRuntime) -> str:
     return result["final_answer"]
 
 
-supervisor_model = init_chat_model(model=settings.AGENT_MODEL_NAME, api_key=settings.GEMINI_API_KEY)
+supervisor_model = init_chat_model(model=settings.SUPERVISOR_MODEL_NAME)
 tools = [find_papers, get_paper_details, retrieve_and_answer_question]
 supervisor_tool_node = ToolNode(tools)
 

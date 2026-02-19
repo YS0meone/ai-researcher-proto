@@ -25,9 +25,9 @@ from langchain_core.runnables import ConfigurableField
 from typing import List
 
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
+embeddings = OpenAIEmbeddings(model=settings.EMBEDDING_MODEL_NAME)
 logger = logging.getLogger(__name__)
-kv_store = RedisDocumentStore(redis_url="redis://localhost:6379")
+kv_store = RedisDocumentStore(redis_url=settings.REDIS_URL)
 
 
 class QdrantService:

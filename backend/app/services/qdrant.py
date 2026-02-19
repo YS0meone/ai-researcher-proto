@@ -51,6 +51,15 @@ class QdrantService:
                 ),
             )
 
+        # Ensure payload index exists for paper ID filtering.
+        # Required by Qdrant Cloud strict mode (unindexed_filtering_retrieve=False).
+        # create_payload_index is idempotent — safe to call on every startup.
+        self.client.create_payload_index(
+            collection_name=collection,
+            field_name="metadata.id",
+            field_schema="keyword",
+        )
+
         self.vector_store = QdrantVectorStore(
             client=self.client,
             collection_name=collection,

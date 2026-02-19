@@ -70,11 +70,10 @@ async def ingest_papers(req: IngestRequest):
 def _check_task(task_id: str) -> TaskStatus:
     """Synchronous helper — safe to run in a thread."""
     result = celery_app.AsyncResult(task_id)
-    status = TaskStatus(
-        taskId=task_id,
-        state=result.state,
-        result=result.result if result.ready() else None,
-    )
+    res = result.result if result.ready() else None
+    if res is not None and not isinstance(res, dict):
+        res = {"error": str(res)}
+    status = TaskStatus(taskId=task_id, state=result.state, result=res)
     del result  # ensure __del__ fires here in the thread, not on the event loop
     return status
 

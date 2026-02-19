@@ -12,4 +12,4 @@ RUN uv sync --frozen --no-dev
 # Copy app code
 COPY . .
 
-CMD ["uv", "run", "python", "-m", "celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1"]
+CMD ["uv", "run", "python", "-m", "celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1", "--without-heartbeat", "--without-mingle", "--without-gossip"]

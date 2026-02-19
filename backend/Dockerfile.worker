@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Install dependencies (no dev deps, use frozen lockfile)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# Copy app code
+COPY . .
+
+CMD ["uv", "run", "python", "-m", "celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1"]

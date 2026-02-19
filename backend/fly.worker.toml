@@ -1,0 +1,29 @@
+# fly.toml app configuration file generated for ai-researcher-worker on 2026-02-19T16:09:22-06:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ai-researcher-worker'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile.worker'
+
+[env]
+  LANGCHAIN_PROJECT = 'ai-researcher-proto'
+  PDF_DOWNLOAD_DIR = '/tmp/papers'
+  QDRANT_COLLECTION = 'papers'
+  QDRANT_DISTANCE = 'COSINE'
+  QDRANT_VECTOR_SIZE = '1536'
+  EMBEDDING_MODEL_NAME = 'text-embedding-3-small'
+  SUPERVISOR_MODEL_NAME = 'google_genai:gemini-3-flash-preview'
+  PF_AGENT_MODEL_NAME = 'google_genai:gemini-3-flash-preview'
+  PF_FILTER_MODEL_NAME = 'google_genai:gemini-3-flash-preview'
+  QA_AGENT_MODEL_NAME = 'gpt-5-mini-2025-08-07'
+  QA_EVALUATION_MODEL_NAME = 'google_genai:gemini-3-flash-preview'
+  QA_EVALUATOR_MODEL_NAME = 'google_genai:gemini-3-pro-preview'
+  QA_BASELINE_MODEL_NAME = 'google_genai:gemini-3-flash-preview'
+
+[[vm]]
+  memory = '2gb'
+  cpus = 1

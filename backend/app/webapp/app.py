@@ -41,9 +41,13 @@ class TaskStatus(BaseModel):
     result: dict | None = None
 
 
-def _send_ingest_task(paper_dict: dict):
-    """Synchronous helper — keeps Celery proxy resolution off the event loop."""
-    return ingest_paper_task.delay(paper_dict)
+def _send_ingest_task(paper_dict: dict) -> str:
+    """Synchronous helper — keeps Celery proxy resolution off the event loop.
+    Returns only the task ID string so the AsyncResult is never passed to the event loop."""
+    async_result = ingest_paper_task.delay(paper_dict)
+    task_id = async_result.id
+    del async_result  # ensure __del__ fires here in the thread, not on the event loop
+    return task_id
 
 
 @app.post("/ingest", response_model=IngestResponse, status_code=202)
@@ -57,8 +61,8 @@ async def ingest_papers(req: IngestRequest):
     for paper in req.papers:
         # Serialize to JSON-safe dict before sending to Celery
         paper_dict = paper.model_dump(mode="json")
-        result = await asyncio.to_thread(_send_ingest_task, paper_dict)
-        tasks.append(TaskRef(paperId=paper.paperId, taskId=result.id))
+        task_id = await asyncio.to_thread(_send_ingest_task, paper_dict)
+        tasks.append(TaskRef(paperId=paper.paperId, taskId=task_id))
 
     return IngestResponse(tasks=tasks)
 
@@ -66,11 +70,13 @@ async def ingest_papers(req: IngestRequest):
 def _check_task(task_id: str) -> TaskStatus:
     """Synchronous helper — safe to run in a thread."""
     result = celery_app.AsyncResult(task_id)
-    return TaskStatus(
+    status = TaskStatus(
         taskId=task_id,
         state=result.state,
         result=result.result if result.ready() else None,
     )
+    del result  # ensure __del__ fires here in the thread, not on the event loop
+    return status
 
 
 @app.get("/ingest/status/{task_id}", response_model=TaskStatus)

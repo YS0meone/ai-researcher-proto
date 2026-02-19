@@ -7,7 +7,6 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 from qdrant_client.http.models import Distance, VectorParams
-from langchain_huggingface import HuggingFaceEmbeddings
 from app.core.schema import ArxivPaper
 from app.core.schema import S2Paper
 import arxiv
@@ -34,7 +33,7 @@ class QdrantService:
 
     def __init__(self, config: QdrantConfig):
         self.config = config
-        self.client = QdrantClient(url=self.config.url, timeout=60)
+        self.client = QdrantClient(url=self.config.url, api_key=self.config.api_key or None, timeout=60)
 
         self.child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,

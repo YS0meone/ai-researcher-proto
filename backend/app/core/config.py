@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class QdrantConfig(BaseModel):
     url: str
+    api_key: str
     vector_size: int
     collection: str
     distance: str
@@ -50,6 +51,7 @@ class Settings(BaseSettings):
     PDF_DOWNLOAD_DIR: str
 
     QDRANT_URL: str
+    QDRANT_API_KEY: str = ""
     QDRANT_VECTOR_SIZE: int
     QDRANT_COLLECTION: str
     QDRANT_DISTANCE: str
@@ -65,6 +67,7 @@ class Settings(BaseSettings):
     def qdrant_config(self) -> QdrantConfig:
         return QdrantConfig(
             url=self.QDRANT_URL,
+            api_key=self.QDRANT_API_KEY,
             vector_size=self.QDRANT_VECTOR_SIZE,
             collection=self.QDRANT_COLLECTION,
             distance=self.QDRANT_DISTANCE,

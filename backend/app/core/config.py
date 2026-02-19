@@ -19,20 +19,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent / ".env",
         env_file_encoding="utf-8",
-        extra="forbid",
+        extra="ignore",
         validate_assignment=True,
         case_sensitive=False
     )
     # Logging configuration
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-
-    # LangSmith configuration (optional)
-    LANGCHAIN_TRACING_V2: bool = False
-    LANGCHAIN_API_KEY: str = ""
-    LANGCHAIN_PROJECT: str = "ai-researcher-proto"
-
-    OPENAI_API_KEY: str
-    GEMINI_API_KEY: str
 
     EMBEDDING_MODEL_NAME: str
 
@@ -44,7 +36,6 @@ class Settings(BaseSettings):
     QA_EVALUATOR_MODEL_NAME: str
     QA_BASELINE_MODEL_NAME: str
 
-    TAVILY_API_KEY: str
     COHERE_API_KEY: str
     
 

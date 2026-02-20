@@ -12,7 +12,7 @@ import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
 } from "@/lib/ensure-tool-responses";
-import { LangGraphLogoSVG } from "../icons/langgraph";
+import { CorvusSVG } from "../icons/corvus";
 import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
@@ -111,7 +111,7 @@ export function Thread() {
   );
   const [hideToolCalls, setHideToolCalls] = useQueryState(
     "hideToolCalls",
-    parseAsBoolean.withDefault(false),
+    parseAsBoolean.withDefault(true),
   );
   const [input, setInput] = useState("");
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
@@ -314,9 +314,9 @@ export function Thread() {
                   damping: 30,
                 }}
               >
-                <LangGraphLogoSVG width={32} height={32} />
+                <CorvusSVG width={32} height={32} />
                 <span className="text-xl font-semibold tracking-tight">
-                  Agent Chat
+                  Corvus
                 </span>
               </motion.button>
             </div>
@@ -405,9 +405,9 @@ export function Thread() {
               <div className="sticky flex flex-col items-center gap-8 bottom-0 bg-white">
                 {!chatStarted && (
                   <div className="flex gap-3 items-center">
-                    <LangGraphLogoSVG className="flex-shrink-0 h-8" />
+                    <CorvusSVG className="flex-shrink-0 h-8" />
                     <h1 className="text-2xl font-semibold tracking-tight">
-                      Agent Chat
+                      Corvus
                     </h1>
                   </div>
                 )}
@@ -448,7 +448,7 @@ export function Thread() {
                         <div className="flex items-center space-x-2">
                           <Switch
                             id="render-tool-calls"
-                            checked={hideToolCalls ?? false}
+                            checked={hideToolCalls ?? true}
                             onCheckedChange={setHideToolCalls}
                           />
                           <Label

@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import { useThreads } from "@/providers/Thread";
 import { Thread } from "@langchain/langgraph-sdk";
 import { useEffect } from "react";
-
 import { getContentString } from "../utils";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import {
@@ -11,21 +10,41 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
-import { PanelRightOpen, PanelRightClose } from "lucide-react";
+import { MessageSquare, PanelRightOpen, SquarePen } from "lucide-react";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { cn } from "@/lib/utils";
+
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 function ThreadList({
   threads,
   onThreadClick,
 }: {
   threads: Thread[];
-  onThreadClick?: (threadId: string) => void;
+  onThreadClick?: () => void;
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
 
+  if (threads.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground">
+        <MessageSquare className="size-7 opacity-25" />
+        <p className="text-sm">No conversations yet</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-full flex flex-col w-full gap-2 items-start justify-start overflow-y-scroll [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent">
+    <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-200 [&::-webkit-scrollbar-track]:bg-transparent px-2 py-2">
       {threads.map((t) => {
         let itemText = t.thread_id;
         if (
@@ -38,46 +57,88 @@ function ThreadList({
           const firstMessage = t.values.messages[0];
           itemText = getContentString(firstMessage.content);
         }
+        const isActive = t.thread_id === threadId;
+        const dateStr = t.updated_at ? formatDate(t.updated_at) : "";
+
         return (
-          <div key={t.thread_id} className="w-full px-1">
-            <Button
-              variant="ghost"
-              className="text-left items-start justify-start font-normal w-[280px]"
-              onClick={(e) => {
-                e.preventDefault();
-                onThreadClick?.(t.thread_id);
-                if (t.thread_id === threadId) return;
-                setThreadId(t.thread_id);
-              }}
-            >
-              <p className="truncate text-ellipsis">{itemText}</p>
-            </Button>
-          </div>
+          <button
+            key={t.thread_id}
+            onClick={(e) => {
+              e.preventDefault();
+              onThreadClick?.();
+              if (t.thread_id === threadId) return;
+              setThreadId(t.thread_id);
+            }}
+            className={cn(
+              "w-full text-left rounded-md px-3 py-2 mb-0.5 transition-colors",
+              isActive
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-accent/60 text-foreground",
+            )}
+          >
+            <p className="truncate text-sm leading-snug">{itemText}</p>
+            {dateStr && (
+              <p className="text-xs text-muted-foreground mt-0.5">{dateStr}</p>
+            )}
+          </button>
         );
       })}
     </div>
   );
 }
 
-function ThreadHistoryLoading() {
+function SidebarContent({
+  threads,
+  onClose,
+  onNewThread,
+  onThreadClick,
+}: {
+  threads: Thread[];
+  onClose: () => void;
+  onNewThread: () => void;
+  onThreadClick?: () => void;
+}) {
   return (
-    <div className="h-full flex flex-col w-full gap-2 items-start justify-start overflow-y-scroll [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent">
-      {Array.from({ length: 30 }).map((_, i) => (
-        <Skeleton key={`skeleton-${i}`} className="w-[280px] h-10" />
-      ))}
-    </div>
+    <>
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/60">
+        <span className="text-sm font-semibold tracking-tight px-1">
+          Conversations
+        </span>
+        <div className="flex items-center gap-0.5">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-8"
+            onClick={onNewThread}
+            title="New conversation"
+          >
+            <SquarePen className="size-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-8"
+            onClick={onClose}
+            title="Close sidebar"
+          >
+            <PanelRightOpen className="size-4" />
+          </Button>
+        </div>
+      </div>
+      <ThreadList threads={threads} onThreadClick={onThreadClick} />
+    </>
   );
 }
 
 export default function ThreadHistory() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
+  const [, setThreadId] = useQueryState("threadId");
   const [chatHistoryOpen, setChatHistoryOpen] = useQueryState(
     "chatHistoryOpen",
     parseAsBoolean.withDefault(false),
   );
 
-  const { getThreads, threads, setThreads, threadsLoading, setThreadsLoading } =
-    useThreads();
+  const { getThreads, threads, setThreads, setThreadsLoading } = useThreads();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -88,31 +149,21 @@ export default function ThreadHistory() {
       .finally(() => setThreadsLoading(false));
   }, []);
 
+  const handleClose = () => setChatHistoryOpen(false);
+  const handleNewThread = () => setThreadId(null);
+
   return (
     <>
-      <div className="hidden lg:flex flex-col border-r-[1px] border-slate-300 items-start justify-start gap-6 h-screen w-[300px] shrink-0 shadow-inner-right">
-        <div className="flex items-center justify-between w-full pt-1.5 px-4">
-          <Button
-            className="hover:bg-gray-100"
-            variant="ghost"
-            onClick={() => setChatHistoryOpen((p) => !p)}
-          >
-            {chatHistoryOpen ? (
-              <PanelRightOpen className="size-5" />
-            ) : (
-              <PanelRightClose className="size-5" />
-            )}
-          </Button>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Thread History
-          </h1>
-        </div>
-        {threadsLoading ? (
-          <ThreadHistoryLoading />
-        ) : (
-          <ThreadList threads={threads} />
-        )}
+      {/* Desktop: fixed sidebar */}
+      <div className="hidden lg:flex flex-col border-r border-border h-screen w-[260px] shrink-0 bg-muted/20">
+        <SidebarContent
+          threads={threads}
+          onClose={handleClose}
+          onNewThread={handleNewThread}
+        />
       </div>
+
+      {/* Mobile: sheet */}
       <div className="lg:hidden">
         <Sheet
           open={!!chatHistoryOpen && !isLargeScreen}
@@ -121,14 +172,13 @@ export default function ThreadHistory() {
             setChatHistoryOpen(open);
           }}
         >
-          <SheetContent side="left" className="lg:hidden flex">
-            <SheetHeader>
-              <SheetTitle>Thread History</SheetTitle>
+          <SheetContent side="left" className="flex flex-col p-0 w-[260px]">
+            <SheetHeader className="px-3 py-2.5 border-b border-border/60">
+              <SheetTitle className="text-sm font-semibold px-1">
+                Conversations
+              </SheetTitle>
             </SheetHeader>
-            <ThreadList
-              threads={threads}
-              onThreadClick={() => setChatHistoryOpen((o) => !o)}
-            />
+            <ThreadList threads={threads} onThreadClick={handleClose} />
           </SheetContent>
         </Sheet>
       </div>

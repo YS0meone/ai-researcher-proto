@@ -145,7 +145,7 @@ class QdrantService:
             self.config.output_dir,
             glob="*",
             suffixes=[".pdf"],
-            parser=GrobidParser(segment_sentences=False),
+            parser=GrobidParser(segment_sentences=False, grobid_server=settings.GROBID_SERVER_URL),
         )
         docs = loader.load()
         if not docs:
@@ -202,7 +202,7 @@ class QdrantService:
             self.config.output_dir,
             glob=file_name+".pdf",
             suffixes=[".pdf"],
-            parser=GrobidParser(segment_sentences=False),
+            parser=GrobidParser(segment_sentences=False, grobid_server=settings.GROBID_SERVER_URL),
         )
         docs = loader.load()
         if not docs:

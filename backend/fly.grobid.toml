@@ -1,34 +1,17 @@
 # fly.toml for GROBID server — deployed as a separate Fly app.
-# Accessed internally by ai-researcher-worker via:
+# No public endpoint — accessed internally by ai-researcher-worker via:
 #   http://ai-researcher-grobid.internal:8070
 
 app = 'ai-researcher-grobid'
 primary_region = 'iad'
 
 [build]
-  image = 'lfoppiano/grobid:0.8.1'
+  image = 'grobid/grobid:0.8.2-crf'
 
-[http_service]
-  internal_port = 8070
-  force_https = true
-  auto_stop_machines = 'off'
-  auto_start_machines = false
-  min_machines_running = 1
-  max_machines_running = 1
-
-  [http_service.concurrency]
-    type = 'requests'
-    hard_limit = 10
-    soft_limit = 5
-
-  [[http_service.checks]]
-    grace_period = '60s'
-    interval = '30s'
-    method = 'GET'
-    path = '/api/isalive'
-    timeout = '10s'
+# No [http_service] — internal-only via Fly private network (6PN).
+# Fly-proxy is not involved; the worker reaches GROBID directly at .internal DNS.
 
 [[vm]]
-  memory = '8gb'
+  memory = '2gb'
   cpu_kind = 'performance'
-  cpus = 2
+  cpus = 1

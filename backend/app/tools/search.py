@@ -178,7 +178,7 @@ EXAMPLES:
 @tool(
     args_schema=S2SearchPapersRequest
     )
-def s2_search_papers(
+async def s2_search_papers(
     runtime: ToolRuntime,
     reasoning: str,
     query: str,
@@ -224,7 +224,7 @@ def s2_search_papers(
     # Get new papers from S2
     try:
         s2_client = S2Client()
-        new_results = s2_client.search_papers(
+        new_results = await s2_client.search_papers(
             query=query,
             year=year,
             venue=venue,
@@ -367,7 +367,7 @@ class ForwardSnowballRequest(BaseModel):
 
 
 @tool(args_schema=ForwardSnowballRequest)
-def forward_snowball(
+async def forward_snowball(
     runtime: ToolRuntime,
     reasoning: str,
     seed_paper_ids: List[str],
@@ -419,9 +419,9 @@ def forward_snowball(
         
         for paper_id in seed_paper_ids:
             try:
-                references = s2_client.get_paper_references(
+                references = await s2_client.get_paper_references(
                     paper_id=paper_id,
-                    fields=["paperId", "corpusId", "title", "abstract", "authors", 
+                    fields=["paperId", "corpusId", "title", "abstract", "authors",
                            "year", "citationCount", "influentialCitationCount"]
                 )
                 
@@ -526,7 +526,7 @@ class BackwardSnowballRequest(BaseModel):
 
 
 @tool(args_schema=BackwardSnowballRequest)
-def backward_snowball(
+async def backward_snowball(
     runtime: ToolRuntime,
     reasoning: str,
     seed_paper_ids: List[str],
@@ -578,9 +578,9 @@ def backward_snowball(
         
         for paper_id in seed_paper_ids:
             try:
-                citations = s2_client.get_paper_citations(
+                citations = await s2_client.get_paper_citations(
                     paper_id=paper_id,
-                    fields=["paperId", "corpusId", "title", "abstract", "authors", 
+                    fields=["paperId", "corpusId", "title", "abstract", "authors",
                            "year", "citationCount", "influentialCitationCount"]
                 )
                 

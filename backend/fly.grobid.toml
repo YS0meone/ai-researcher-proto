@@ -12,6 +12,6 @@ primary_region = 'iad'
 # Fly-proxy is not involved; the worker reaches GROBID directly at .internal DNS.
 
 [[vm]]
-  memory = '2gb'
+  memory = '4gb'
   cpu_kind = 'performance'
   cpus = 1

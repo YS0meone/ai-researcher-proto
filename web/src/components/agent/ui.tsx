@@ -136,7 +136,7 @@ interface TaskPollStatus {
 
 export const PaperListComponent = (props: PaperListComponentProps) => {
   const paperCount = props.papers?.length || 0;
-  const { selectPaper, deselectPaper } = usePaperSelection();
+  const { selectPaper } = usePaperSelection();
   const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
   const [taskStatuses, setTaskStatuses] = useState<TaskPollStatus[]>([]);
@@ -231,12 +231,15 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
       }
       return newSet;
     });
-    // Sync to global context so "Yes, proceed" button reflects checkbox state
-    if (selected) {
-      const paper = props.papers.find(p => p.paperId === paperId);
-      if (paper) selectPaper(paper);
+  };
+
+  const allSelected = paperCount > 0 && tempSelected.size === paperCount;
+
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setTempSelected(new Set());
     } else {
-      deselectPaper(paperId);
+      setTempSelected(new Set(props.papers.map(p => p.paperId).filter(Boolean) as string[]));
     }
   };
 
@@ -325,10 +328,17 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
             <h3 className="text-base font-semibold text-gray-900">
               Found {paperCount} Paper{paperCount !== 1 ? 's' : ''}
             </h3>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
               {selectedCount > 0
                 ? `${selectedCount} paper${selectedCount !== 1 ? 's' : ''} selected`
                 : 'Check papers below to add them to your list'}
+              <span className="text-gray-300">·</span>
+              <button
+                onClick={handleSelectAll}
+                className="text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+              >
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
             </p>
           </div>
           <button

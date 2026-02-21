@@ -115,6 +115,7 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
+  const [interruptRejected, setInterruptRejected] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
   const { hasSelection, selectedPaperIds } = usePaperSelection();
 
@@ -168,27 +169,30 @@ export function Thread() {
 
   const isInterrupted = !!stream.interrupt;
 
+  // Reset rejected state when the interrupt clears (graph resumed successfully).
+  useEffect(() => {
+    if (!stream.interrupt) setInterruptRejected(false);
+  }, [stream.interrupt]);
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    // When interrupted, allow empty input (just resuming with selection).
-    // When not interrupted, require non-empty input.
-    if ((!input.trim() && !isInterrupted) || isLoading) return;
+    if (isLoading) return;
+    // Locked interrupt state — Yes/No buttons handle it, block form submit.
+    if (isInterrupted && !interruptRejected) return;
+    if (!input.trim()) return;
     setFirstTokenReceived(false);
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
 
-    if (isInterrupted) {
-      // LangGraph server treats `input` and `command` as mutually exclusive —
-      // state updates in the first argument are silently ignored when a command
-      // is present.  Embed selected_paper_ids and the user message inside the
-      // resume value so the replanner can read them from interrupt()'s return.
+    if (isInterrupted && interruptRejected) {
+      // User rejected the paper results and is typing a new search query.
       stream.submit(
         {},
         {
           command: {
             resume: {
-              selected_paper_ids: selectedPaperIds,
-              user_message: input.trim() || null,
+              selected_paper_ids: [],
+              user_message: input.trim(),
             },
           },
           streamMode: ["values"],
@@ -383,6 +387,7 @@ export function Thread() {
                         message={message}
                         isLoading={isLoading}
                         handleRegenerate={handleRegenerate}
+                        onInterruptNo={() => setInterruptRejected(true)}
                       />
                     ),
                   )}
@@ -394,6 +399,7 @@ export function Thread() {
                     message={undefined}
                     isLoading={isLoading}
                     handleRegenerate={handleRegenerate}
+                    onInterruptNo={() => setInterruptRejected(true)}
                   />
                 )}
                 {isLoading && !firstTokenReceived && (
@@ -414,7 +420,10 @@ export function Thread() {
 
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
-                <div className="bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10">
+                <div className={cn(
+                  "bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10 transition-colors",
+                  isInterrupted && !interruptRejected && "border-amber-300 bg-amber-50/40",
+                )}>
                   <form
                     onSubmit={handleSubmit}
                     className="grid grid-rows-[1fr_auto] gap-2 max-w-3xl mx-auto"
@@ -422,6 +431,7 @@ export function Thread() {
                     <textarea
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
+                      disabled={isInterrupted && !interruptRejected}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Enter" &&
@@ -436,11 +446,16 @@ export function Thread() {
                         }
                       }}
                       placeholder={
-                        isInterrupted
-                          ? "Type a follow-up, or click Continue to proceed..."
-                          : "Type your message..."
+                        isInterrupted && !interruptRejected
+                          ? "Please respond to the question above first..."
+                          : isInterrupted && interruptRejected
+                            ? "Describe what you'd like to search for..."
+                            : "Type your message..."
                       }
-                      className="p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none"
+                      className={cn(
+                        "p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none",
+                        isInterrupted && !interruptRejected && "opacity-50 cursor-not-allowed",
+                      )}
                     />
 
                     <div className="flex items-center justify-between p-2 pt-4">
@@ -468,9 +483,9 @@ export function Thread() {
                         <Button
                           type="submit"
                           className="transition-all shadow-md"
-                          disabled={isLoading || (!input.trim() && !isInterrupted)}
+                          disabled={isLoading || (isInterrupted && !interruptRejected) || !input.trim()}
                         >
-                          {isInterrupted ? "Continue" : "Send"}
+                          Send
                         </Button>
                       )}
                     </div>

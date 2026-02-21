@@ -19,26 +19,32 @@ interface StepTrackerProps {
 
 export const StepTracker = ({ steps }: StepTrackerProps) => {
   return (
-    <div className="w-xl max-w-3xl rounded-lg border border-gray-200 bg-white p-4 space-y-3 shadow-sm">
-      <div className="flex items-center gap-2 mb-3">
-        <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div className="w-xl max-w-3xl rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
+        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
-        <h3 className="font-semibold text-gray-900">Agent Actions</h3>
+        <h3 className="text-base font-semibold text-gray-900">Agent Actions</h3>
       </div>
 
-      <div className="space-y-2">
-        {steps.map((step, index) => (
+      {/* Steps */}
+      <div className="divide-y divide-gray-100">
+        {steps.map((step) => (
           <div
             key={step.id}
-            className={`flex items-start gap-3 p-3 rounded-md transition-all ${
-              step.status === 'running' ? 'bg-gray-50 border border-gray-200' : ''
+            className={`group flex items-start gap-3 px-4 py-3 cursor-default transition-colors duration-150 ${
+              step.status === 'running'
+                ? 'bg-gray-50 hover:bg-gray-100'
+                : step.status === 'error'
+                ? 'hover:bg-red-50/50'
+                : 'hover:bg-gray-50'
             }`}
           >
-            {/* Status Icon */}
-            <div className="flex-shrink-0 mt-0.5">
+            {/* Status icon */}
+            <div className="flex-shrink-0 mt-0.5 w-5 h-5 flex items-center justify-center">
               {step.status === 'completed' && (
-                <svg className="w-5 h-5 text-gray-900" fill="currentColor" viewBox="0 0 20 20">
+                <svg className="w-5 h-5 text-gray-900 group-hover:text-black transition-colors" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
               )}
@@ -49,36 +55,39 @@ export const StepTracker = ({ steps }: StepTrackerProps) => {
                 </svg>
               )}
               {step.status === 'pending' && (
-                <div className="w-5 h-5 rounded-full border-2 border-gray-300" />
+                <div className="w-4 h-4 rounded-full border-2 border-gray-300 group-hover:border-gray-400 transition-colors" />
               )}
               {step.status === 'error' && (
-                <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                <svg className="w-5 h-5 text-red-500 group-hover:text-red-600 transition-colors" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                 </svg>
               )}
             </div>
 
-            {/* Step Content */}
+            {/* Content */}
             <div className="flex-1 min-w-0">
-              <div className={`font-medium ${
-                step.status === 'running' ? 'text-gray-900' :
-                step.status === 'completed' ? 'text-gray-700' :
-                step.status === 'error' ? 'text-red-700' :
-                'text-gray-500'
+              <p className={`text-sm font-medium leading-snug transition-colors ${
+                step.status === 'running'   ? 'text-gray-900' :
+                step.status === 'completed' ? 'text-gray-600 group-hover:text-gray-900' :
+                step.status === 'error'     ? 'text-red-700' :
+                'text-gray-400 group-hover:text-gray-500'
               }`}>
                 {step.label}
-              </div>
+              </p>
               {step.description && (
-                <div className="text-sm text-gray-600 mt-1">
+                <p className="text-xs text-gray-400 mt-0.5 leading-snug group-hover:text-gray-500 transition-colors">
                   {step.description}
-                </div>
+                </p>
               )}
             </div>
 
-            {/* Connector Line (except for last item) */}
-            {index < steps.length - 1 && step.status !== 'pending' && (
-              <div className="absolute left-[34px] top-10 w-0.5 h-full bg-gray-200"
-                   style={{ height: '24px' }} />
+            {/* Running indicator */}
+            {step.status === 'running' && (
+              <div className="flex-shrink-0 self-center">
+                <span className="text-xs text-gray-500 group-hover:text-gray-700 transition-colors">
+                  Running…
+                </span>
+              </div>
             )}
           </div>
         ))}
@@ -136,7 +145,7 @@ interface TaskPollStatus {
 
 export const PaperListComponent = (props: PaperListComponentProps) => {
   const paperCount = props.papers?.length || 0;
-  const { selectPaper } = usePaperSelection(); // Only used to add to persistent list after ingestion
+  const { selectPaper } = usePaperSelection();
   const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
   const [taskStatuses, setTaskStatuses] = useState<TaskPollStatus[]>([]);
@@ -233,6 +242,16 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
     });
   };
 
+  const allSelected = paperCount > 0 && tempSelected.size === paperCount;
+
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setTempSelected(new Set());
+    } else {
+      setTempSelected(new Set(props.papers.map(p => p.paperId).filter(Boolean) as string[]));
+    }
+  };
+
   const handleAddToPaperList = async () => {
     if (tempSelected.size === 0) return;
 
@@ -318,10 +337,17 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
             <h3 className="text-base font-semibold text-gray-900">
               Found {paperCount} Paper{paperCount !== 1 ? 's' : ''}
             </h3>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
               {selectedCount > 0
                 ? `${selectedCount} paper${selectedCount !== 1 ? 's' : ''} selected`
                 : 'Check papers below to add them to your list'}
+              <span className="text-gray-300">·</span>
+              <button
+                onClick={handleSelectAll}
+                className="text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+              >
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
             </p>
           </div>
           <button

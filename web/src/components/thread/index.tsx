@@ -170,55 +170,34 @@ export function Thread() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    // When interrupted, allow empty input (just resuming with selection).
-    // When not interrupted, require non-empty input.
-    if ((!input.trim() && !isInterrupted) || isLoading) return;
+    if (isLoading || isInterrupted) return;
+    if (!input.trim()) return;
     setFirstTokenReceived(false);
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
+    const newHumanMessage: Message = {
+      id: uuidv4(),
+      type: "human",
+      content: input,
+    };
 
-    if (isInterrupted) {
-      // LangGraph server treats `input` and `command` as mutually exclusive —
-      // state updates in the first argument are silently ignored when a command
-      // is present.  Embed selected_paper_ids and the user message inside the
-      // resume value so the replanner can read them from interrupt()'s return.
-      stream.submit(
-        {},
-        {
-          command: {
-            resume: {
-              selected_paper_ids: selectedPaperIds,
-              user_message: input.trim() || null,
-            },
-          },
-          streamMode: ["values"],
-        },
-      );
-    } else {
-      const newHumanMessage: Message = {
-        id: uuidv4(),
-        type: "human",
-        content: input,
-      };
-
-      stream.submit(
-        {
-          messages: [...toolMessages, newHumanMessage],
-          selected_paper_ids: selectedPaperIds,
-        },
-        {
-          streamMode: ["values"],
-          optimisticValues: (prev) => ({
-            ...prev,
-            messages: [
-              ...(prev.messages ?? []),
-              ...toolMessages,
-              newHumanMessage,
-            ],
-          }),
-        },
-      );
-    }
+    stream.submit(
+      {
+        messages: [...toolMessages, newHumanMessage],
+        selected_paper_ids: selectedPaperIds,
+      },
+      {
+        streamMode: ["values"],
+        optimisticValues: (prev) => ({
+          ...prev,
+          messages: [
+            ...(prev.messages ?? []),
+            ...toolMessages,
+            newHumanMessage,
+          ],
+        }),
+      },
+    );
 
     setInput("");
   };
@@ -404,17 +383,26 @@ export function Thread() {
             footer={
               <div className="sticky flex flex-col items-center gap-8 bottom-0 bg-white">
                 {!chatStarted && (
-                  <div className="flex gap-3 items-center">
-                    <CorvusSVG className="flex-shrink-0 h-8" />
-                    <h1 className="text-2xl font-semibold tracking-tight">
-                      Corvus
-                    </h1>
+                  <div className="flex flex-col items-start gap-2 w-full max-w-3xl">
+                    <div className="flex gap-3 items-center">
+                      <CorvusSVG className="flex-shrink-0 h-12" />
+                      <h1 className="text-4xl font-semibold tracking-tight">
+                        Corvus
+                      </h1>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-semibold text-foreground">An AI research assistant for academic literature.</span>{" "}
+                      Find relevant papers, build your reading list, and get evidence-backed answers to your research questions.
+                    </p>
                   </div>
                 )}
 
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
-                <div className="bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10">
+                <div className={cn(
+                  "bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10 transition-colors",
+                  isInterrupted && "border-amber-300 bg-amber-50/40",
+                )}>
                   <form
                     onSubmit={handleSubmit}
                     className="grid grid-rows-[1fr_auto] gap-2 max-w-3xl mx-auto"
@@ -422,6 +410,7 @@ export function Thread() {
                     <textarea
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
+                      disabled={isInterrupted}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Enter" &&
@@ -437,10 +426,13 @@ export function Thread() {
                       }}
                       placeholder={
                         isInterrupted
-                          ? "Type a follow-up, or click Continue to proceed..."
-                          : "Type your message..."
+                          ? "Please respond to the question above first..."
+                          : "Find papers, ask a question, or both…"
                       }
-                      className="p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none"
+                      className={cn(
+                        "p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none",
+                        isInterrupted && "opacity-50 cursor-not-allowed",
+                      )}
                     />
 
                     <div className="flex items-center justify-between p-2 pt-4">
@@ -468,9 +460,9 @@ export function Thread() {
                         <Button
                           type="submit"
                           className="transition-all shadow-md"
-                          disabled={isLoading || (!input.trim() && !isInterrupted)}
+                          disabled={isLoading || isInterrupted || !input.trim()}
                         >
-                          {isInterrupted ? "Continue" : "Send"}
+                          Send
                         </Button>
                       )}
                     </div>

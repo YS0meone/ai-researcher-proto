@@ -350,11 +350,16 @@ def post_tool(state: SupervisorState):
 
 
 def post_tool_route(state: SupervisorState) -> str:
-    """Route to replanner after find_papers; go straight to END after QA."""
+    """Route to replanner only when find_papers ran AND QA is still in the plan."""
     messages = state.get("messages", [])
     for msg in reversed(messages):
         if isinstance(msg, ToolMessage):
-            return "replanner" if msg.name == "find_papers" else "__end__"
+            if msg.name == "find_papers":
+                remaining = state.get("plan_steps", [])
+                if "retrieve_and_answer_question" in remaining:
+                    return "replanner"
+                return "__end__"
+            return "__end__"
     return "__end__"
 
 
@@ -364,15 +369,8 @@ def post_tool_route(state: SupervisorState) -> str:
 # When LangGraph resumes from an interrupt it re-runs this node from the top;
 # interrupt() returns the resume value immediately on the second execution.
 
-class ReplanOutput(BaseModel):
-    reasoning: str = Field(description="Why these remaining steps were chosen")
-    updated_steps: List[Literal["find_papers", "retrieve_and_answer_question"]] = Field(
-        description="Remaining steps to execute after this interrupt"
-    )
-
-
 async def replanner(state: SupervisorState):
-    """Interrupt for paper selection, then update the plan.
+    """Interrupt for paper selection, then deterministically update the plan.
 
     The resume payload is a dict sent by the client:
         { "selected_paper_ids": [...], "user_message": "..." | null }
@@ -382,14 +380,11 @@ async def replanner(state: SupervisorState):
     `command` as mutually exclusive.  Embedding them in the resume value is the
     reliable way to carry them across the interrupt boundary.
     """
-    ui_manager = UIManager.from_state(state)
-
     # Pause here — paper list UI is already in state (committed by post_tool).
     resume_payload = interrupt("select_papers")
 
     # ── Resumed ──────────────────────────────────────────────────────────────
     logger.info(f"Replanner resumed, payload: {resume_payload}")
-    ui_manager.update_ui(StepName.REPLANNING, StepStatus.RUNNING)
 
     # Extract selected_paper_ids and optional user message from the resume payload.
     if isinstance(resume_payload, dict):
@@ -403,47 +398,26 @@ async def replanner(state: SupervisorState):
     logger.info(f"Replanner: selected_ids={selected_ids}, user_message={user_message_text!r}")
 
     # Build the updated messages list (include the human message if provided)
-    messages = list(state.get("messages", []))
     new_messages: list = []
     if user_message_text:
         new_messages.append(HumanMessage(content=user_message_text))
-        messages = messages + new_messages  # used for replanner LLM context
 
-    remaining = list(state.get("plan_steps", []))
-    papers_now = state.get("papers", [])
-    selected_abstracts = get_paper_abstract(papers_now, selected_ids) if selected_ids else "(none selected)"
+    # Rejection path: clear plan so the graph ends after executor finds nothing to do.
+    if not selected_ids:
+        return {
+            "plan_steps": [],
+            "selected_paper_ids": [],
+            "messages": new_messages,
+            "steps": state.get("steps", []),
+        }
 
-    replan_prompt = f"""You are a replanner for a research assistant.
-
-The user just reviewed a list of papers returned by a search.
-Your job: decide which steps (if any) should still run.
-
-Remaining steps before this interrupt: {remaining}
-
-Rules:
-- If the user's new message requests a new/different search → ["find_papers", ...] (keep QA if originally requested)
-- If papers were selected and the original intent included answering a question → ["retrieve_and_answer_question"]
-- If the user is satisfied or asks something unrelated → []
-
-Current papers: {len(papers_now)}
-Selected papers: {len(selected_ids)}
-Selected paper abstracts:
-{selected_abstracts}
-"""
-    structured = supervisor_model.bind_tools([ReplanOutput], tool_choice="ReplanOutput")
-    response = await structured.ainvoke([
-        SystemMessage(content=replan_prompt),
-        *messages,
-    ])
-    updated = response.tool_calls[0]["args"].get("updated_steps", [])
-    logger.info(f"Replanner updated steps: {updated}")
-
-    new_steps = ui_manager.update_ui(StepName.REPLANNING, StepStatus.COMPLETED)
+    # Acceptance path: keep existing remaining steps, commit selected paper IDs.
+    remaining_steps = list(state.get("plan_steps", []))
     return {
-        "plan_steps": updated,
-        "selected_paper_ids": selected_ids,  # commit to state so QA tool can read it
+        "plan_steps": remaining_steps,
+        "selected_paper_ids": selected_ids,
         "messages": new_messages,
-        "steps": new_steps,
+        "steps": state.get("steps", []),
     }
 
 

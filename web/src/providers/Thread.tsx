@@ -39,19 +39,22 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
 
+  const resolvedApiUrl = apiUrl || import.meta.env.VITE_API_URL;
+  const resolvedAssistantId = assistantId || import.meta.env.VITE_ASSISTANT_ID;
+
   const getThreads = useCallback(async (): Promise<Thread[]> => {
-    if (!apiUrl || !assistantId) return [];
-    const client = createClient(apiUrl, getApiKey() ?? undefined);
+    if (!resolvedApiUrl || !resolvedAssistantId) return [];
+    const client = createClient(resolvedApiUrl, getApiKey() ?? undefined);
 
     const threads = await client.threads.search({
       metadata: {
-        ...getThreadSearchMetadata(assistantId),
+        ...getThreadSearchMetadata(resolvedAssistantId),
       },
       limit: 100,
     });
 
     return threads;
-  }, [apiUrl, assistantId]);
+  }, [resolvedApiUrl, resolvedAssistantId]);
 
   const value = {
     getThreads,

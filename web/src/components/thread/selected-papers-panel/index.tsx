@@ -31,7 +31,7 @@ function SelectedPapersContent() {
               {selectedPapers.size}
             </span>
           </div>
-          <p className="text-xs text-gray-500">Papers added to your research collection</p>
+          <p className="text-xs text-gray-500">Papers available to the research assistant</p>
         </div>
         <Button
           variant="ghost"
@@ -66,7 +66,7 @@ function SelectedPapersContent() {
               No papers in your list
             </h3>
             <p className="text-sm text-gray-500">
-              Add papers from search results to build your collection
+              Add papers from search results to make them available to the research assistant
             </p>
           </div>
         ) : (

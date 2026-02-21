@@ -120,6 +120,4 @@ class StepStatus(Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     ERROR = "error"
-    CLEAR = "clear"
-    UNCLEAR = "unclear"
 

@@ -140,7 +140,7 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
   const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
   const [taskStatuses, setTaskStatuses] = useState<TaskPollStatus[]>([]);
-  const backendApiUrl = import.meta.env.VITE_BACKEND_API_URL || 'http://localhost:2024';
+  const backendApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:2024';
 
   // Poll task statuses until all are terminal
   useEffect(() => {

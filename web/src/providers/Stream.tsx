@@ -16,6 +16,7 @@ import { useQueryState } from "nuqs";
 import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
+import { useAuth } from "@clerk/clerk-react";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
 
@@ -41,16 +42,13 @@ async function sleep(ms = 4000) {
 async function checkGraphStatus(
   apiUrl: string,
   apiKey: string | null,
+  clerkToken: string | null,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${apiUrl}/info`, {
-      ...(apiKey && {
-        headers: {
-          "X-Api-Key": apiKey,
-        },
-      }),
-    });
-
+    const headers: Record<string, string> = {};
+    if (apiKey) headers["X-Api-Key"] = apiKey;
+    if (clerkToken) headers["Authorization"] = `Bearer ${clerkToken}`;
+    const res = await fetch(`${apiUrl}/info`, { headers });
     return res.ok;
   } catch (e) {
     console.error(e);
@@ -63,19 +61,26 @@ const StreamSession = ({
   apiKey,
   apiUrl,
   assistantId,
+  clerkToken,
 }: {
   children: ReactNode;
   apiKey: string | null;
   apiUrl: string;
   assistantId: string;
+  clerkToken: string | null;
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+
+  const defaultHeaders: Record<string, string> = {};
+  if (clerkToken) defaultHeaders["Authorization"] = `Bearer ${clerkToken}`;
+
   const streamValue = useTypedStream({
     apiUrl,
     apiKey: apiKey ?? undefined,
     assistantId,
     threadId: threadId ?? null,
+    defaultHeaders,
     onCustomEvent: (event, options) => {
       options.mutate((prev) => {
         const ui = uiMessageReducer(prev.ui ?? [], event);
@@ -84,14 +89,12 @@ const StreamSession = ({
     },
     onThreadId: (id) => {
       setThreadId(id);
-      // Refetch threads list when thread ID changes.
-      // Wait for some seconds before fetching so we're able to get the new thread that was created.
       sleep().then(() => getThreads().then(setThreads).catch(console.error));
     },
   });
 
   useEffect(() => {
-    checkGraphStatus(apiUrl, apiKey).then((ok) => {
+    checkGraphStatus(apiUrl, apiKey, clerkToken).then((ok) => {
       if (!ok) {
         toast.error("Failed to connect to LangGraph server", {
           description: () => (
@@ -106,7 +109,7 @@ const StreamSession = ({
         });
       }
     });
-  }, [apiKey, apiUrl]);
+  }, [apiKey, apiUrl, clerkToken]);
 
   return (
     <StreamContext.Provider value={streamValue}>
@@ -122,12 +125,24 @@ const DEFAULT_ASSISTANT_ID = "agent";
 export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
-  // Get environment variables
+  const { getToken } = useAuth();
+  const [clerkToken, setClerkToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchToken = async () => {
+      const token = await getToken();
+      setClerkToken(token);
+    };
+    fetchToken();
+    // Refresh every 55 minutes — Clerk JWTs expire after 60 minutes
+    const interval = setInterval(fetchToken, 55 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [getToken]);
+
   const envApiUrl: string | undefined = import.meta.env.VITE_API_URL;
   const envAssistantId: string | undefined = import.meta.env.VITE_ASSISTANT_ID;
   const envApiKey: string | undefined = import.meta.env.VITE_LANGSMITH_API_KEY;
 
-  // Use URL params with env var fallbacks
   const [apiUrl] = useQueryState("apiUrl", {
     defaultValue: envApiUrl || "",
   });
@@ -135,13 +150,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     defaultValue: envAssistantId || "",
   });
 
-  // For API key, use localStorage with env var fallback
   const [apiKey] = useState(() => {
     const storedKey = getApiKey();
     return storedKey || envApiKey || "";
   });
 
-  // Determine final values to use, prioritizing URL params then env vars
   const finalApiUrl = apiUrl || envApiUrl;
   const finalAssistantId = assistantId || envAssistantId;
 
@@ -150,13 +163,13 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
       apiKey={apiKey || null}
       apiUrl={finalApiUrl || DEFAULT_API_URL}
       assistantId={finalAssistantId || DEFAULT_ASSISTANT_ID}
+      clerkToken={clerkToken}
     >
       {children}
     </StreamSession>
   );
 };
 
-// Create a custom hook to use the context
 export const useStreamContext = (): StreamContextType => {
   const context = useContext(StreamContext);
   if (context === undefined) {

@@ -76,12 +76,10 @@ export function AssistantMessage({
   message,
   isLoading,
   handleRegenerate,
-  onInterruptNo,
 }: {
   message: Message | undefined;
   isLoading: boolean;
   handleRegenerate: (parentCheckpoint: Checkpoint | null | undefined) => void;
-  onInterruptNo?: () => void;
 }) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
@@ -154,7 +152,7 @@ export function AssistantMessage({
           !isAgentInboxInterruptSchema(threadInterrupt.value) &&
           isLastMessage ? (
             threadInterrupt.value === "select_papers" ? (
-              <SelectPapersInterruptView onNo={onInterruptNo ?? (() => {})} />
+              <SelectPapersInterruptView />
             ) : (
               <GenericInterruptView interrupt={threadInterrupt.value} />
             )

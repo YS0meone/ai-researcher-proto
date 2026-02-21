@@ -115,7 +115,6 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
-  const [interruptRejected, setInterruptRejected] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
   const { hasSelection, selectedPaperIds } = usePaperSelection();
 
@@ -169,60 +168,36 @@ export function Thread() {
 
   const isInterrupted = !!stream.interrupt;
 
-  // Reset rejected state when the interrupt clears (graph resumed successfully).
-  useEffect(() => {
-    if (!stream.interrupt) setInterruptRejected(false);
-  }, [stream.interrupt]);
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (isLoading) return;
-    // Locked interrupt state — Yes/No buttons handle it, block form submit.
-    if (isInterrupted && !interruptRejected) return;
+    if (isLoading || isInterrupted) return;
     if (!input.trim()) return;
     setFirstTokenReceived(false);
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
+    const newHumanMessage: Message = {
+      id: uuidv4(),
+      type: "human",
+      content: input,
+    };
 
-    if (isInterrupted && interruptRejected) {
-      // User rejected the paper results and is typing a new search query.
-      stream.submit(
-        {},
-        {
-          command: {
-            resume: {
-              selected_paper_ids: [],
-              user_message: input.trim(),
-            },
-          },
-          streamMode: ["values"],
-        },
-      );
-    } else {
-      const newHumanMessage: Message = {
-        id: uuidv4(),
-        type: "human",
-        content: input,
-      };
-
-      stream.submit(
-        {
-          messages: [...toolMessages, newHumanMessage],
-          selected_paper_ids: selectedPaperIds,
-        },
-        {
-          streamMode: ["values"],
-          optimisticValues: (prev) => ({
-            ...prev,
-            messages: [
-              ...(prev.messages ?? []),
-              ...toolMessages,
-              newHumanMessage,
-            ],
-          }),
-        },
-      );
-    }
+    stream.submit(
+      {
+        messages: [...toolMessages, newHumanMessage],
+        selected_paper_ids: selectedPaperIds,
+      },
+      {
+        streamMode: ["values"],
+        optimisticValues: (prev) => ({
+          ...prev,
+          messages: [
+            ...(prev.messages ?? []),
+            ...toolMessages,
+            newHumanMessage,
+          ],
+        }),
+      },
+    );
 
     setInput("");
   };
@@ -387,7 +362,6 @@ export function Thread() {
                         message={message}
                         isLoading={isLoading}
                         handleRegenerate={handleRegenerate}
-                        onInterruptNo={() => setInterruptRejected(true)}
                       />
                     ),
                   )}
@@ -399,7 +373,6 @@ export function Thread() {
                     message={undefined}
                     isLoading={isLoading}
                     handleRegenerate={handleRegenerate}
-                    onInterruptNo={() => setInterruptRejected(true)}
                   />
                 )}
                 {isLoading && !firstTokenReceived && (
@@ -422,7 +395,7 @@ export function Thread() {
 
                 <div className={cn(
                   "bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10 transition-colors",
-                  isInterrupted && !interruptRejected && "border-amber-300 bg-amber-50/40",
+                  isInterrupted && "border-amber-300 bg-amber-50/40",
                 )}>
                   <form
                     onSubmit={handleSubmit}
@@ -431,7 +404,7 @@ export function Thread() {
                     <textarea
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      disabled={isInterrupted && !interruptRejected}
+                      disabled={isInterrupted}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Enter" &&
@@ -446,15 +419,13 @@ export function Thread() {
                         }
                       }}
                       placeholder={
-                        isInterrupted && !interruptRejected
+                        isInterrupted
                           ? "Please respond to the question above first..."
-                          : isInterrupted && interruptRejected
-                            ? "Describe what you'd like to search for..."
-                            : "Type your message..."
+                          : "Type your message..."
                       }
                       className={cn(
                         "p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none",
-                        isInterrupted && !interruptRejected && "opacity-50 cursor-not-allowed",
+                        isInterrupted && "opacity-50 cursor-not-allowed",
                       )}
                     />
 
@@ -483,7 +454,7 @@ export function Thread() {
                         <Button
                           type="submit"
                           className="transition-all shadow-md"
-                          disabled={isLoading || (isInterrupted && !interruptRejected) || !input.trim()}
+                          disabled={isLoading || isInterrupted || !input.trim()}
                         >
                           Send
                         </Button>

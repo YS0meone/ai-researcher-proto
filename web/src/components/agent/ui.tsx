@@ -136,7 +136,7 @@ interface TaskPollStatus {
 
 export const PaperListComponent = (props: PaperListComponentProps) => {
   const paperCount = props.papers?.length || 0;
-  const { selectPaper } = usePaperSelection(); // Only used to add to persistent list after ingestion
+  const { selectPaper, deselectPaper } = usePaperSelection();
   const [tempSelected, setTempSelected] = useState<Set<string>>(new Set()); // Temporary checkbox selections
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ status: 'idle' });
   const [taskStatuses, setTaskStatuses] = useState<TaskPollStatus[]>([]);
@@ -231,6 +231,13 @@ export const PaperListComponent = (props: PaperListComponentProps) => {
       }
       return newSet;
     });
+    // Sync to global context so "Yes, proceed" button reflects checkbox state
+    if (selected) {
+      const paper = props.papers.find(p => p.paperId === paperId);
+      if (paper) selectPaper(paper);
+    } else {
+      deselectPaper(paperId);
+    }
   };
 
   const handleAddToPaperList = async () => {

@@ -10,7 +10,7 @@
       "app": "./app/webapp/app.py:app"
     },
     "auth": {
-      "path": "./auth.py:auth",
+      "path": "./app/auth.py:auth",
       "disable_studio_auth": true
     }
   }

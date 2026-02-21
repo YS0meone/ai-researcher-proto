@@ -383,11 +383,17 @@ export function Thread() {
             footer={
               <div className="sticky flex flex-col items-center gap-8 bottom-0 bg-white">
                 {!chatStarted && (
-                  <div className="flex gap-3 items-center">
-                    <CorvusSVG className="flex-shrink-0 h-8" />
-                    <h1 className="text-2xl font-semibold tracking-tight">
-                      Corvus
-                    </h1>
+                  <div className="flex flex-col items-start gap-2 w-full max-w-3xl">
+                    <div className="flex gap-3 items-center">
+                      <CorvusSVG className="flex-shrink-0 h-12" />
+                      <h1 className="text-4xl font-semibold tracking-tight">
+                        Corvus
+                      </h1>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-semibold text-foreground">An AI research assistant for academic literature.</span>{" "}
+                      Find relevant papers, build your reading list, and get evidence-backed answers to your research questions.
+                    </p>
                   </div>
                 )}
 
@@ -421,7 +427,7 @@ export function Thread() {
                       placeholder={
                         isInterrupted
                           ? "Please respond to the question above first..."
-                          : "Type your message..."
+                          : "Find papers, ask a question, or both…"
                       }
                       className={cn(
                         "p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none",

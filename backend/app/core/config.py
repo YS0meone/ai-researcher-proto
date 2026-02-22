@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     GROBID_SERVER_URL: str
 
-    CLERK_JWKS_URL: str
+    CLERK_JWKS_URL: str = ""  # only required by the LangGraph backend, not the Celery worker
     DISABLE_AUTH: bool = False
     
     @property

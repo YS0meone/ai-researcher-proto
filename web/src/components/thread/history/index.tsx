@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { useThreads } from "@/providers/Thread";
 import { Thread } from "@langchain/langgraph-sdk";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getContentString } from "../utils";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import {
@@ -10,9 +10,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { MessageSquare, PanelRightOpen, SquarePen } from "lucide-react";
+import { ChevronUp, LogOut, MessageSquare, PanelRightOpen, SquarePen } from "lucide-react";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
+import { useUser, useClerk } from "@clerk/clerk-react";
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -87,6 +88,86 @@ function ThreadList({
   );
 }
 
+function UserSection() {
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  if (!user) return null;
+
+  const initials = [user.firstName, user.lastName]
+    .filter(Boolean)
+    .map((n) => n![0].toUpperCase())
+    .join("") || user.emailAddresses[0]?.emailAddress[0].toUpperCase() || "?";
+
+  const displayName =
+    [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+    user.emailAddresses[0]?.emailAddress ||
+    "Account";
+
+  const email = user.emailAddresses[0]?.emailAddress ?? "";
+
+  return (
+    <div ref={containerRef} className="relative border-t border-border/60">
+      {/* Popover — opens upward */}
+      {open && (
+        <div className="absolute bottom-full left-2 right-2 mb-1 rounded-lg border border-border bg-background shadow-lg overflow-hidden z-50">
+          {/* Email */}
+          <div className="px-3 py-2.5">
+            <p className="text-xs text-muted-foreground truncate">{email}</p>
+          </div>
+          <div className="h-px bg-border/60 mx-1" />
+          {/* Sign out */}
+          <button
+            onClick={() => signOut({ redirectUrl: "/sign-in" })}
+            className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-foreground hover:bg-accent/60 transition-colors"
+          >
+            <LogOut className="size-4 text-muted-foreground" strokeWidth={1.75} />
+            Sign out
+          </button>
+        </div>
+      )}
+
+      {/* Trigger */}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 hover:bg-accent/60 transition-colors"
+      >
+        {/* Avatar */}
+        <div className="size-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-xs font-semibold shrink-0">
+          {initials}
+        </div>
+
+        {/* Name */}
+        <span className="flex-1 truncate text-sm text-left font-medium text-foreground">
+          {displayName}
+        </span>
+
+        <ChevronUp
+          className={cn(
+            "size-4 text-muted-foreground transition-transform shrink-0",
+            open ? "rotate-180" : "",
+          )}
+          strokeWidth={1.75}
+        />
+      </button>
+    </div>
+  );
+}
+
 function SidebarContent({
   threads,
   onClose,
@@ -126,6 +207,7 @@ function SidebarContent({
         </div>
       </div>
       <ThreadList threads={threads} onThreadClick={onThreadClick} />
+      <UserSection />
     </>
   );
 }
@@ -179,6 +261,7 @@ export default function ThreadHistory() {
               </SheetTitle>
             </SheetHeader>
             <ThreadList threads={threads} onThreadClick={handleClose} />
+            <UserSection />
           </SheetContent>
         </Sheet>
       </div>

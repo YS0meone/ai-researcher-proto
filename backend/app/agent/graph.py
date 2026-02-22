@@ -178,7 +178,7 @@ async def query_clarification(state: SupervisorState):
 
     if "clarification" not in response:
         logger.info("Query is clear, proceeding to planner")
-        new_steps = ui_manager.update_ui(StepName.QUERY_CLARIFICATION, StepStatus.COMPLETED)
+        new_steps = ui_manager.update_ui(StepName.QUERY_CLARIFICATION, StepStatus.COMPLETED, True)
         return {
             "messages": [new_ui_tracking_message],
             "is_clear": True,
@@ -188,7 +188,7 @@ async def query_clarification(state: SupervisorState):
         }
     else:
         logger.info("Query needs clarification, requesting user input")
-        new_steps = ui_manager.update_ui(StepName.QUERY_CLARIFICATION, StepStatus.COMPLETED, response["clarification"])
+        new_steps = ui_manager.update_ui(StepName.QUERY_CLARIFICATION, StepStatus.COMPLETED, False, response["clarification"])
         return {
             "messages": [new_ui_tracking_message, AIMessage(content=response["clarification"])],
             "is_clear": False,

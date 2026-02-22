@@ -20,12 +20,12 @@ def get_template_step(step_name: StepName, step_status: StepStatus) -> Step:
     }
 
 
-def get_update_query_clarification_step(step_name: StepName, step_status: StepStatus, *args: tuple[str, ...]):
+def get_update_query_clarification_step(step_name: StepName, step_status: StepStatus, is_clear: bool = True, *args: str):
     template_step = get_template_step(step_name, step_status)
     if step_status == StepStatus.RUNNING:
-        template_step["description"] = f"Checking if query is clear..."
+        template_step["description"] = "Checking if query is clear..."
     elif step_status == StepStatus.COMPLETED:
-        template_step["description"] = f"The query is clear."
+        template_step["description"] = "The query is clear." if is_clear else "The query is unclear. Ask for clarification"
     else:
         raise ValueError(f"Invalid step status: {step_status}")
     return template_step

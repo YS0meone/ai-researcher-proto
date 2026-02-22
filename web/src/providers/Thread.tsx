@@ -12,6 +12,7 @@ import {
   SetStateAction,
 } from "react";
 import { createClient } from "./client";
+import { useAuth } from "@clerk/clerk-react";
 
 interface ThreadContextType {
   getThreads: () => Promise<Thread[]>;
@@ -34,6 +35,7 @@ function getThreadSearchMetadata(
 }
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
+  const { getToken } = useAuth();
   const [apiUrl] = useQueryState("apiUrl");
   const [assistantId] = useQueryState("assistantId");
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -44,7 +46,14 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
 
   const getThreads = useCallback(async (): Promise<Thread[]> => {
     if (!resolvedApiUrl || !resolvedAssistantId) return [];
-    const client = createClient(resolvedApiUrl, getApiKey() ?? undefined);
+    const token = await getToken();
+    const defaultHeaders: Record<string, string> = {};
+    if (token) defaultHeaders["Authorization"] = `Bearer ${token}`;
+    const client = createClient(
+      resolvedApiUrl,
+      getApiKey() ?? undefined,
+      defaultHeaders,
+    );
 
     const threads = await client.threads.search({
       metadata: {
@@ -54,7 +63,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     });
 
     return threads;
-  }, [resolvedApiUrl, resolvedAssistantId]);
+  }, [resolvedApiUrl, resolvedAssistantId, getToken]);
 
   const value = {
     getThreads,

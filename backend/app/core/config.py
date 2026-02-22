@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str
 
     GROBID_SERVER_URL: str
+
+    CLERK_JWKS_URL: str
+    DISABLE_AUTH: bool = False
     
     @property
     def qdrant_config(self) -> QdrantConfig:

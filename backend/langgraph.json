@@ -8,5 +8,9 @@
     "image_distro": "wolfi",
     "http": {
       "app": "./app/webapp/app.py:app"
+    },
+    "auth": {
+      "path": "./app/auth.py:auth",
+      "disable_studio_auth": true
     }
   }

@@ -36,6 +36,8 @@ dependencies = [
     "redis>=5.0.0",
     "pypdf>=6.7.0",
     "bs4>=0.0.2",
+    "pyjwt[cryptography]>=2.11.0",
+    "cryptography>=46.0.4",
 ]
 
 [dependency-groups]

@@ -137,8 +137,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
       setClerkToken(token);
     };
     fetchToken();
-    // Refresh every 55 minutes — Clerk JWTs expire after 60 minutes
-    const interval = setInterval(fetchToken, 55 * 60 * 1000);
+    // Clerk session JWTs expire after 60 seconds by default. getToken()
+    // transparently re-mints when needed; we poll every 50 s to keep
+    // the cached clerkToken state (and thus defaultHeaders) always fresh.
+    const interval = setInterval(fetchToken, 50 * 1000);
     return () => clearInterval(interval);
   }, [getToken]);
 

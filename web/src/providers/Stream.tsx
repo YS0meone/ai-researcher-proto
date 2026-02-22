@@ -18,6 +18,9 @@ import { useThreads } from "./Thread";
 import { toast } from "sonner";
 import { useAuth } from "@clerk/clerk-react";
 
+// StreamProvider only mounts inside <SignedIn>, so clerkToken will always
+// be available once the token fetch resolves.
+
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
 
 const useTypedStream = useStream<
@@ -157,6 +160,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
 
   const finalApiUrl = apiUrl || envApiUrl;
   const finalAssistantId = assistantId || envAssistantId;
+
+  // Wait until the Clerk token is fetched before mounting StreamSession,
+  // so useStream's internal client is always initialized with the auth header.
+  if (!clerkToken) return null;
 
   return (
     <StreamSession

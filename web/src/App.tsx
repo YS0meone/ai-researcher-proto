@@ -4,6 +4,9 @@ import { SignedIn, SignedOut, SignIn, SignUp } from "@clerk/clerk-react";
 import { CorvusSVG } from "@/components/icons/corvus";
 import { Route, Routes, Navigate } from "react-router-dom";
 import { Search, BookOpen, Sparkles } from "lucide-react";
+import { StreamProvider } from "./providers/Stream.tsx";
+import { ThreadProvider } from "./providers/Thread.tsx";
+import { PaperSelectionProvider } from "./providers/PaperSelection.tsx";
 
 const features = [
   {
@@ -90,6 +93,18 @@ function AuthPage({ form }: { form: "sign-in" | "sign-up" }) {
   );
 }
 
+function AuthenticatedApp() {
+  return (
+    <ThreadProvider>
+      <StreamProvider>
+        <PaperSelectionProvider>
+          <Thread />
+        </PaperSelectionProvider>
+      </StreamProvider>
+    </ThreadProvider>
+  );
+}
+
 function App() {
   return (
     <Routes>
@@ -117,7 +132,7 @@ function App() {
               <Navigate to="/sign-in" replace />
             </SignedOut>
             <SignedIn>
-              <Thread />
+              <AuthenticatedApp />
             </SignedIn>
           </>
         }

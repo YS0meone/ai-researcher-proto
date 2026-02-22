@@ -198,6 +198,48 @@ class QdrantService:
         return data
 
     def add_s2_paper(self, file_name: str, paper_id: str) -> int:
+        import requests as _requests
+
+        # ── Diagnostic block — covers all known failure scenarios ─────────
+        pdf_dir = Path(self.config.output_dir)
+        glob_pattern = file_name + ".pdf"
+        all_pdfs = list(pdf_dir.glob("*.pdf"))
+        matched = list(pdf_dir.glob(glob_pattern))
+        logger.info(
+            f"[grobid-debug] dir={pdf_dir} | glob='{glob_pattern}' | "
+            f"all_pdfs={[f.name for f in all_pdfs]} | "
+            f"matched={[f.name for f in matched]}"
+        )
+        # Scenario 1: file size (detects empty/corrupt download)
+        for f in matched:
+            logger.info(f"[grobid-debug] '{f.name}' size={f.stat().st_size} bytes")
+
+        # Scenario 2+3+5: probe GROBID directly to see raw status + response
+        # (bypasses LangChain so we see exactly what GROBID returns)
+        if matched:
+            try:
+                with open(matched[0], "rb") as _pdf:
+                    _r = _requests.post(
+                        settings.GROBID_SERVER_URL,
+                        files={"input": (matched[0].name, _pdf, "application/pdf", {"Expires": "0"})},
+                        data={
+                            "generateIDs": "1",
+                            "consolidateHeader": "0",
+                            "segmentSentences": "1",
+                            "teiCoordinates": ["head", "s"],
+                        },
+                        timeout=60,
+                    )
+                logger.info(
+                    f"[grobid-debug] GROBID status={_r.status_code} "
+                    f"content-type={_r.headers.get('content-type')} "
+                    f"len={len(_r.text)} "
+                    f"preview={_r.text[:400]!r}"
+                )
+            except Exception as _e:
+                logger.error(f"[grobid-debug] GROBID direct POST failed: {type(_e).__name__}: {_e}")
+        # ── End diagnostic block ──────────────────────────────────────────
+
         loader = GenericLoader.from_filesystem(
             self.config.output_dir,
             glob=file_name+".pdf",

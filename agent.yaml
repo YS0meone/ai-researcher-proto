@@ -1,0 +1,39 @@
+spec_version: "0.1.0"
+name: corvus
+version: 1.0.0
+description: >
+  Corvus is a multi-agent AI research system built on a LangGraph supervisor
+  architecture. A top-level supervisor routes between two specialized subagents:
+  a Paper Finding Agent that searches Semantic Scholar (200M+ papers), runs
+  web searches via Tavily, and performs citation snowballing; and a Q&A Agent
+  that retrieves evidence from user-selected papers stored in a Qdrant vector
+  database and synthesises grounded, evidence-based answers. The system
+  supports real-time streaming, user-interrupt paper selection, background PDF
+  ingestion via Celery, and an MCP server for direct tool access in Claude Desktop.
+author: YS0meone
+license: MIT
+
+model:
+  preferred: google:gemini-2.0-flash
+  constraints:
+    temperature: 0.0
+
+skills:
+  - paper-finding
+  - citation-snowballing
+  - evidence-retrieval
+  - qa-over-papers
+
+runtime:
+  max_turns: 50
+  timeout: 300
+
+compliance:
+  risk_tier: standard
+  supervision:
+    human_in_the_loop: destructive
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+  data_governance:
+    pii_handling: redact

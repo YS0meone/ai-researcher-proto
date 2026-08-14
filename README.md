@@ -1,3 +1,5 @@
+
+
 # Corvus
 
 A **multi-agent AI research system** built on a supervisor architecture. A top-level supervisor routes between specialized subagents — a Paper Finding Agent for academic search and citation discovery, and a Q&A Agent for evidence-based question answering over the papers you select.
@@ -172,7 +174,7 @@ Local infrastructure variables (Qdrant, Redis, Grobid) are pre-filled with `loca
 make infra
 ```
 
-Starts Redis (6379), Qdrant (6333), and Grobid (8070) via Docker Compose.
+Starts PostgreSQL (5432), Redis (6379), Qdrant (6333), and Grobid (8070) via Docker Compose.
 
 ### 4. Start the Celery worker, backend, and frontend
 
@@ -202,4 +204,3 @@ make worker-cloud
 
 - `[backend/README.md](./backend/README.md)` — environment variables, project structure, full architecture reference
 - `[web/README.md](./web/README.md)` — frontend setup and env vars
-
